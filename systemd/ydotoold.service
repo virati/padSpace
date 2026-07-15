@@ -1,0 +1,11 @@
+[Unit]
+Description=ydotool user daemon (virtual keyboard, used by padSpace arrow buttons)
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ydotoold --socket-path=%t/.ydotool_socket --socket-own=%U:%U
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,714 @@
+#!/usr/bin/env python3
+"""Launchpad Mini MK3 -> KDE per-screen virtual desktop switcher + command pad.
+
+Requires Plasma 6.7+ with PerOutputVirtualDesktops=true (kwinrc [Desktops]).
+
+Fixed rows (Programmer mode, grid note = 10*row + col, row 1 = bottom):
+  notes 81-88 (top pad row)    -> desktops 1-8 on the ACTIVE screen  (green)
+  notes 71-78 (second pad row) -> desktops 1-8 on the OTHER screen   (cyan)
+
+Every other pad and round button is bindable to a shell command via
+~/.config/padspace/bindings.conf. Lines look like:
+
+    36 = konsole                      # pad note 36 launches konsole
+    45 @13 = playerctl play-pause     # pad note 45, lit yellow (palette 13)
+    cc98 @5 = loginctl lock-session   # round button CC 98, lit red
+
+Bound buttons are lit with their color (default blue, palette 45) and flash
+white on press. Commands run detached via systemd-run --user. Edits to the
+config are picked up automatically within a few seconds. Unknown presses are
+logged with their ID: journalctl --user -u launchpad-workspaces -f
+"""
+
+import math
+import os
+import re
+import select
+import signal
+import subprocess
+import sys
+import time
+
+DEVICE_MATCH = "LPMiniMK3"
+SEQ_CLIENT = "Launchpad Mini MK3"
+# Workspace control: the top two pad rows form two side-by-side 2x4 grids.
+# LEFT grid (cols 1-4) = screen 0 (first display), RIGHT grid (cols 5-8) =
+# screen 1. Within each grid: upper row = desktops 1-4, lower row = 5-8.
+# Screen order comes from workspace.screenOrder (falls back to .screens).
+GRID_S0 = {81: 1, 82: 2, 83: 3, 84: 4, 71: 5, 72: 6, 73: 7, 74: 8}
+GRID_S1 = {85: 1, 86: 2, 87: 3, 88: 4, 75: 5, 76: 6, 77: 7, 78: 8}
+WORKSPACE_NOTES = set(GRID_S0) | set(GRID_S1)
+COLOR_ACTIVE = 0x03   # white: a screen's current desktop
+COLOR_IDLE = 0x01     # dim white: desktop has windows; empty desktops are unlit
+COLOR_BOUND = 45      # default for bound buttons (blue)
+
+# App markers: workspaces holding a matching window get this color on idle
+# pads. Each rule: (target, js_regex, color) — target "class" tests the
+# lowercased window resourceClass, "caption" the lowercased window title
+# (caption = the browser's ACTIVE tab title, so background tabs don't count).
+# When a workspace matches several rules, MARKER_COMBOS is checked first,
+# then the earliest rule wins.
+MARKERS = [
+    ("class", "(^|[^a-z])code([^a-z]|$)|vscod", 5),                        # 0 VS Code -> red
+    ("caption", "vineet.{0,4}work ?log|notion.*work ?log|work ?log.*notion", 21),  # 1 Notion work log -> green
+    ("class", "slack", 45),                                                # 2 Slack -> blue
+]
+MARKER_COMBOS = {
+    frozenset({1, 2}): 37,   # worklog green + slack blue -> cyan
+}
+COLOR_FLASH = 3       # white press feedback
+FLASH_SECS = 0.35
+POLL_SECS = 5.0   # safety-net only; the persistent KWin event script does real-time updates
+
+# Hold-to-move: the Mini MK3 has no velocity sensing (always 127), so "hard
+# hit" is approximated by hold duration. Tap a workspace pad = switch; hold it
+# this long = the window that was active at press time moves to that pad's
+# desktop and screen (the switch already happened at press, so you land with it).
+HOLD_MOVE_SECS = 0.55
+
+# Sample-row gate: the "Session" round button (row 1, col 5 = CC 95) toggles
+# whether bindings on the bottom pad row fire. Starts disarmed on every
+# daemon start. Button LED: dim white = off, bright purple = armed.
+TOGGLE_CC = 95
+GATED_NOTES = range(11, 19)   # bottom pad row
+COLOR_TOGGLE_ON = 53
+COLOR_TOGGLE_OFF = 1
+
+# Arrow buttons: the four round buttons at row 1 cols 1-4 (cc91-94, printed
+# with arrow glyphs on the device) emit real keyboard arrow-key events via a
+# user-level ydotoold (see systemd/ydotoold.service; needs /dev/uinput access,
+# which Bazzite grants to the seated user by ACL). Linux input keycodes.
+ARROW_CCS = {91: 103, 92: 108, 93: 105, 94: 106}   # up, down, left, right
+YDOTOOL_SOCKET = os.path.join(
+    os.environ.get("XDG_RUNTIME_DIR", "/run/user/" + str(os.getuid())),
+    ".ydotool_socket")
+COLOR_ARROW = 1   # dim white: always available, caps carry the glyphs
+
+# Keys mode: the "Keys" round button (row 1, col 7 = CC 97) turns the bottom-
+# left 3x3 pads into a numpad (numpad layout: 7 8 9 on top, 1 2 3 on the
+# bottom). Presses type the digit via ydotoold. Each pad breathes green at
+# 1/N Hz (pad N has an N-second sine period) using per-pad RGB SysEx.
+# Mutually exclusive with the Session gate and Drum mode (shared pads).
+KEYS_CC = 97
+COLOR_KEYS_ON = 21    # green while numpad active
+NUMPAD = {11: 1, 12: 2, 13: 3, 21: 4, 22: 5, 23: 6, 31: 7, 32: 8, 33: 9}
+OSC_TICK_SECS = 0.25  # RGB refresh cadence for the oscillation
+
+# User mode: the "User" round button (row 1, col 8 = CC 98) turns the bottom
+# two pad rows into skill launchers, read from ~/.ctrl at each toggle-on:
+#   ~/.ctrl/claude/  -> bottom row (11-18), launches Claude Code with /skill
+#   ~/.ctrl/hermes/  -> second row (21-28), launches Hermes with that skill
+# Entries are files/symlinks; sorted by name, an optional "N-" prefix orders
+# them and is stripped to get the skill name. Max 8 per row.
+# Mutually exclusive with Session gate, Drum mode, and Keys mode.
+USER_CC = 98
+CTRL_DIR = os.path.expanduser("~/.ctrl")
+COLOR_CLAUDE = 9      # amber row for Claude Code skills
+COLOR_HERMES = 45     # blue row for Hermes skills
+COLOR_USER_ON = 3     # white while user mode active
+CLAUDE_CMD = 'konsole -e distrobox enter claudebox -- claude "/{name}"'
+HERMES_CMD = 'konsole -e ' + os.path.expanduser("~/.local/bin/hermes") + ' --skills {name} chat'
+
+# Drum mode: the "Drums" round button (row 1, col 6 = CC 96) turns the bottom
+# TWO pad rows into a sampler kit. Samples are preloaded into PipeWire-Pulse
+# (pactl upload-sample) for low-latency triggering. Mutually exclusive with
+# the Session sample-row gate. WAVs live in DRUMKIT_DIR; replace a file and
+# re-toggle drum mode to swap a pad's sound.
+DRUMS_CC = 96
+COLOR_DRUMS_ON = 9    # amber while kit active
+DRUMKIT_DIR = os.path.expanduser("~/.local/share/padspace/drumkit")
+DRUM_PADS = {
+    # bottom row: kicks left, backbone right
+    11: ("kick-punch", 5), 12: ("kick-sub", 7), 13: ("kick-hard", 6), 14: ("snare", 13),
+    15: ("clap", 9), 16: ("hat-closed", 37), 17: ("hat-open", 33), 18: ("crash", 3),
+    # second row: sub-drop + color
+    21: ("sub-drop", 45), 22: ("tom-low", 41), 23: ("tom-high", 40), 24: ("shaker", 21),
+    25: ("pluck", 53), 26: ("snap", 57), 27: ("ride", 2), 28: ("reverse-cymbal", 58),
+}
+
+SYSEX_PROGRAMMER = "F0 00 20 29 02 0D 0E 01 F7"
+SYSEX_LIVE = "F0 00 20 29 02 0D 0E 00 F7"
+
+SCRIPT_DIR = os.path.expanduser("~/.local/share")
+ACTION_JS = os.path.join(SCRIPT_DIR, "padspace-action.js")
+REPORT_JS = os.path.join(SCRIPT_DIR, "padspace-report.js")
+BINDINGS_CONF = os.path.expanduser("~/.config/padspace/bindings.conf")
+
+REPORTER_TEMPLATE = """
+function padspaceReport() {
+const scrs = (workspace.screenOrder && workspace.screenOrder.length)
+  ? workspace.screenOrder : workspace.screens;
+let parts = ["T=" + Date.now()];
+for (let s = 0; s < scrs.length && s < 2; s++) {
+  parts.push("S" + s + "=" + workspace.currentDesktopForScreen(scrs[s]).x11DesktopNumber);
+}
+const rules = [%s];
+let hits = rules.map(function() { return [[], []]; });
+let occ = [[], []];
+for (const w of workspace.windowList()) {
+  if (!w.normalWindow) continue;
+  let sidx = -1;
+  for (let s = 0; s < scrs.length && s < 2; s++) {
+    if (w.output && w.output.name === scrs[s].name) sidx = s;
+  }
+  if (sidx < 0) continue;
+  const desks = w.onAllDesktops ? workspace.desktops : w.desktops;
+  for (const d of desks) {
+    if (occ[sidx].indexOf(d.x11DesktopNumber) < 0) occ[sidx].push(d.x11DesktopNumber);
+  }
+  const c = ("" + w.resourceClass).toLowerCase();
+  const cap = ("" + w.caption).toLowerCase();
+  for (let i = 0; i < rules.length; i++) {
+    if (!rules[i].re.test(rules[i].t ? cap : c)) continue;
+    const bucket = hits[i][sidx];
+    for (const d of desks) {
+      if (bucket.indexOf(d.x11DesktopNumber) < 0) bucket.push(d.x11DesktopNumber);
+    }
+  }
+}
+parts.push("W0=" + occ[0].join(","));
+parts.push("W1=" + occ[1].join(","));
+for (let i = 0; i < rules.length; i++) {
+  parts.push("M" + i + "S0=" + hits[i][0].join(","));
+  parts.push("M" + i + "S1=" + hits[i][1].join(","));
+}
+console.error("PADSPACE-STATE " + parts.join(" "));
+}
+"""
+
+_REPORT_FN = REPORTER_TEMPLATE % ", ".join(
+    "{t:%d, re:/%s/}" % (0 if target == "class" else 1, rx)
+    for target, rx, _ in MARKERS)
+
+# One-shot reporter (poll fallback).
+REPORTER = _REPORT_FN + "\npadspaceReport();\n"
+
+# Persistent event-driven reporter: emits a fresh state line the moment a
+# desktop switches, a window appears/disappears, moves, changes screen, or
+# retitles (caption drives the Notion marker). This is what makes the LEDs
+# feel instant; the poll is only a safety net.
+EVENTS_SCRIPT = _REPORT_FN + """
+function padspaceHook(w) {
+  try { w.desktopsChanged.connect(padspaceReport); } catch (e) {}
+  try { w.captionChanged.connect(padspaceReport); } catch (e) {}
+  try { w.outputChanged.connect(padspaceReport); } catch (e) {}
+}
+try { workspace.currentDesktopChanged.connect(padspaceReport); } catch (e) {}
+try {
+  workspace.windowAdded.connect(function(w) { padspaceHook(w); padspaceReport(); });
+} catch (e) {}
+try { workspace.windowRemoved.connect(function() { padspaceReport(); }); } catch (e) {}
+for (const w of workspace.windowList()) padspaceHook(w);
+padspaceReport();
+"""
+
+SWITCH_SCREEN = """
+const aw = workspace.activeWindow;
+console.error("PADSPACE-GRAB " + (aw ? aw.internalId : "none"));
+const scrs = (workspace.screenOrder && workspace.screenOrder.length)
+  ? workspace.screenOrder : workspace.screens;
+if (scrs.length > %(scr)d)
+  workspace.setCurrentDesktopForScreen(workspace.desktops[%(desk)d], scrs[%(scr)d]);
+"""
+
+MOVE_WINDOW = """
+// NOTE: workspace.sendClientToScreen is unreliable under per-output virtual
+// desktops (silently refuses after desktop switches) — moving by frame
+// geometry into the target output is what an interactive drag does, and works.
+const scrs = (workspace.screenOrder && workspace.screenOrder.length)
+  ? workspace.screenOrder : workspace.screens;
+if (scrs.length > %(scr)d) {
+  const t = scrs[%(scr)d];
+  for (const w of workspace.windowList()) {
+    if (("" + w.internalId) === "%(win)s") {
+      w.desktops = [workspace.desktops[%(desk)d]];
+      if (w.output.name !== t.name) {
+        const g = t.geometry;
+        const fg = w.frameGeometry;
+        w.frameGeometry = {
+          x: g.x + Math.max(20, Math.round((g.width - fg.width) / 2)),
+          y: g.y + Math.max(20, Math.round((g.height - fg.height) / 2)),
+          width: Math.min(fg.width, g.width - 40),
+          height: Math.min(fg.height, g.height - 40)
+        };
+      }
+      break;
+    }
+  }
+}
+"""
+
+NOTE_RE = re.compile(r"Note on\s+(\d+), note (\d+), velocity (\d+)")
+NOTE_OFF_RE = re.compile(r"Note off\s+\d+, note (\d+)")
+CC_RE = re.compile(r"Control change\s+(\d+), controller (\d+), value (\d+)")
+STATE_RE = re.compile(r"PADSPACE-STATE\s+(.*)")
+GRAB_RE = re.compile(r"PADSPACE-GRAB\s+(\S+)")
+BINDING_RE = re.compile(r"^(cc)?(\d+)\s*(?:@(\d+))?\s*=\s*(.+)$")
+
+IN_CONTAINER = os.path.exists("/run/.containerenv")
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def amidi_ports():
+    try:
+        out = subprocess.run(["amidi", "-l"], capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return []
+    return [m.group(1) for m in re.finditer(r"(hw:\d+,\d+,\d+)\s+.*" + DEVICE_MATCH, out)]
+
+
+def send_hex(ports, hexstr):
+    for p in ports:
+        subprocess.run(["amidi", "-p", p, "-S", hexstr], capture_output=True, timeout=10)
+
+
+def busctl(*args):
+    subprocess.run(["busctl", "--user", "call", *args], capture_output=True, timeout=10)
+
+
+def run_kwin_script(path, js, name):
+    with open(path, "w") as f:
+        f.write(js)
+    busctl("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting", "unloadScript", "s", name)
+    busctl("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting", "loadScript", "ss", path, name)
+    busctl("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting", "start")
+
+
+def switch(screen_idx, desktop):
+    js = SWITCH_SCREEN % {"scr": screen_idx, "desk": desktop - 1}
+    run_kwin_script(ACTION_JS, js, "padspace-action")
+
+
+def move_window(win_id, screen_idx, desktop):
+    js = MOVE_WINDOW % {"scr": screen_idx, "desk": desktop - 1, "win": win_id}
+    run_kwin_script(ACTION_JS, js, "padspace-action")
+
+
+def request_state():
+    run_kwin_script(REPORT_JS, REPORTER, "padspace-report")
+
+
+def run_command(cmd):
+    subprocess.Popen(
+        ["systemd-run", "--user", "--collect", "--quiet", "sh", "-c", cmd],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def upload_drumkit():
+    """Preload kit WAVs into PipeWire-Pulse; duplicate uploads fail harmlessly."""
+    loaded = 0
+    for name, _ in DRUM_PADS.values():
+        path = os.path.join(DRUMKIT_DIR, name + ".wav")
+        if os.path.exists(path):
+            subprocess.run(["pactl", "upload-sample", path, "padspace-" + name],
+                           capture_output=True, timeout=10)
+            loaded += 1
+        else:
+            log(f"drumkit: missing {path}")
+    log(f"drumkit: {loaded}/{len(DRUM_PADS)} samples preloaded")
+
+
+def play_drum(note):
+    name, _ = DRUM_PADS[note]
+    subprocess.Popen(["pactl", "play-sample", "padspace-" + name],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def press_key(code):
+    env = dict(os.environ, YDOTOOL_SOCKET=YDOTOOL_SOCKET)
+    subprocess.Popen(["ydotool", "key", f"{code}:1", f"{code}:0"], env=env,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def press_arrow(cc):
+    press_key(ARROW_CCS[cc])
+
+
+def press_digit(digit):
+    press_key(digit + 1)   # Linux input keycodes: KEY_1=2 ... KEY_9=10
+
+
+def load_ctrl():
+    """-> [claude_names, hermes_names], each up to 8, ordered by entry name
+    with an optional 'N-' prefix stripped to yield the skill name."""
+    rows = []
+    for sub in ("claude", "hermes"):
+        names = []
+        try:
+            for entry in sorted(os.listdir(os.path.join(CTRL_DIR, sub))):
+                if not entry.startswith("."):
+                    names.append(re.sub(r"^\d+[-_]", "", entry))
+        except FileNotFoundError:
+            pass
+        rows.append(names[:8])
+    return rows
+
+
+def launch_skill(row_idx, name):
+    cmd = (CLAUDE_CMD if row_idx == 0 else HERMES_CMD).format(name=name)
+    log(f"launching {'claude' if row_idx == 0 else 'hermes'} skill: {name}")
+    run_command(cmd)
+
+
+def numpad_rgb(ports, now):
+    """One SysEx frame of the numpad oscillation: pad N sine-breathes green
+    with an N-second period (frequency 1/N Hz)."""
+    body = []
+    for note, n in NUMPAD.items():
+        g = int(24 + 100 * (0.5 + 0.5 * math.sin(2 * math.pi * now / n)))
+        body += ["03", f"{note:02X}", "00", f"{g:02X}", "08"]
+    send_hex(ports, "F0 00 20 29 02 0D 03 " + " ".join(body) + " F7")
+
+
+def load_bindings():
+    """-> ({note: (color, cmd)}, {cc: (color, cmd)})"""
+    notes, ccs = {}, {}
+    try:
+        with open(BINDINGS_CONF) as f:
+            for ln, raw in enumerate(f, 1):
+                line = raw.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                m = BINDING_RE.match(line)
+                if not m:
+                    log(f"bindings.conf:{ln}: cannot parse: {line}")
+                    continue
+                is_cc, num, color, cmd = m.group(1), int(m.group(2)), m.group(3), m.group(4).strip()
+                color = int(color) if color else COLOR_BOUND
+                if not is_cc and num in WORKSPACE_NOTES:
+                    log(f"bindings.conf:{ln}: note {num} is a workspace grid, ignored")
+                    continue
+                if is_cc and num in (TOGGLE_CC, DRUMS_CC, KEYS_CC, USER_CC, *ARROW_CCS):
+                    log(f"bindings.conf:{ln}: cc{num} is reserved (mode toggle/arrow), ignored")
+                    continue
+                (ccs if is_cc else notes)[num] = (color, cmd)
+    except FileNotFoundError:
+        pass
+    return notes, ccs
+
+
+def bindings_mtime():
+    try:
+        return os.stat(BINDINGS_CONF).st_mtime
+    except FileNotFoundError:
+        return 0
+
+
+def journal_follower():
+    if IN_CONTAINER:
+        cmd = ["journalctl", "-D", "/var/log/journal",
+               "_SYSTEMD_USER_UNIT=plasma-kwin_wayland.service", "-f", "-n", "0", "-o", "cat"]
+    else:
+        cmd = ["journalctl", "--user", "-u", "plasma-kwin_wayland.service", "-f", "-n", "0", "-o", "cat"]
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+
+
+def clear_all(ports):
+    msg = []
+    for r in range(1, 9):
+        for c in range(1, 9):
+            msg += ["90", f"{10 * r + c:02X}", "00"]
+    for cc in list(range(91, 99)) + [10 * r + 9 for r in range(1, 9)]:
+        msg += ["B0", f"{cc:02X}", "00"]
+    send_hex(ports, " ".join(msg))
+
+
+def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, note_binds, cc_binds,
+          samples_on=False, drums_on=False, keys_on=False, user_ctrl=None):
+    msg = []
+    for grid, cur, marked, occ in ((GRID_S0, cur0, marked0, occ0),
+                                   (GRID_S1, cur1, marked1, occ1)):
+        for note, desk in grid.items():
+            if cur is None:          # screen not connected: grid dark
+                color = 0x00
+            elif desk == cur:
+                color = COLOR_ACTIVE
+            elif desk in marked:
+                color = marked[desk]
+            elif desk in occ:
+                color = COLOR_IDLE
+            else:                    # empty workspace: unlit
+                color = 0x00
+            msg += ["90", f"{note:02X}", f"{color:02X}"]
+    for note, (color, _) in note_binds.items():
+        if note in GATED_NOTES and not samples_on:
+            color = 0x00
+        msg += ["90", f"{note:02X}", f"{color:02X}"]
+    for cc, (color, _) in cc_binds.items():
+        msg += ["B0", f"{cc:02X}", f"{color:02X}"]
+    if drums_on:  # drum pads override anything on the bottom two rows
+        for note, (_, color) in DRUM_PADS.items():
+            msg += ["90", f"{note:02X}", f"{color:02X}"]
+    if keys_on:   # numpad base green; the oscillator refines it per tick
+        for note in NUMPAD:
+            msg += ["90", f"{note:02X}", f"{COLOR_KEYS_ON:02X}"]
+    if user_ctrl is not None:  # skill launcher rows: claude bottom, hermes above
+        for row_idx, (base, color) in enumerate(((11, COLOR_CLAUDE), (21, COLOR_HERMES))):
+            names = user_ctrl[row_idx]
+            for i in range(8):
+                c = color if i < len(names) else 0x00
+                msg += ["90", f"{base + i:02X}", f"{c:02X}"]
+    toggle_color = COLOR_TOGGLE_ON if samples_on else COLOR_TOGGLE_OFF
+    msg += ["B0", f"{TOGGLE_CC:02X}", f"{toggle_color:02X}"]
+    drums_color = COLOR_DRUMS_ON if drums_on else COLOR_TOGGLE_OFF
+    msg += ["B0", f"{DRUMS_CC:02X}", f"{drums_color:02X}"]
+    keys_color = COLOR_KEYS_ON if keys_on else COLOR_TOGGLE_OFF
+    msg += ["B0", f"{KEYS_CC:02X}", f"{keys_color:02X}"]
+    user_color = COLOR_USER_ON if user_ctrl is not None else COLOR_TOGGLE_OFF
+    msg += ["B0", f"{USER_CC:02X}", f"{user_color:02X}"]
+    for cc in ARROW_CCS:
+        msg += ["B0", f"{cc:02X}", f"{COLOR_ARROW:02X}"]
+    send_hex(ports, " ".join(msg))
+
+
+def parse_state(line):
+    m = STATE_RE.search(line)
+    if not m:
+        return None
+    cur = [None, None]
+    marked = [{}, {}]
+    occupied = [set(), set()]
+    t_ms = 0.0
+    for tok in m.group(1).split():
+        if tok.startswith("T="):
+            t_ms = float(tok[2:])
+            continue
+        mm = re.match(r"S([01])=(\d+)$", tok)
+        if mm:
+            cur[int(mm.group(1))] = int(mm.group(2))
+            continue
+        mm = re.match(r"W([01])=(.+)", tok)
+        if mm:
+            occupied[int(mm.group(1))] = {int(n) for n in mm.group(2).split(",")}
+            continue
+        mm = re.match(r"M(\d+)S([01])=(.+)", tok)
+        if mm:
+            rule = int(mm.group(1))
+            target = marked[int(mm.group(2))]
+            for n in mm.group(3).split(","):
+                target.setdefault(int(n), set()).add(rule)
+
+    def resolve(rules):
+        for combo, color in MARKER_COMBOS.items():
+            if combo <= rules:
+                return color
+        return MARKERS[min(rules)][2]  # earliest rule wins
+
+    marked = [{desk: resolve(rules) for desk, rules in m.items()} for m in marked]
+    return (t_ms, (cur[0], cur[1], marked[0], marked[1],
+                   frozenset(occupied[0]), frozenset(occupied[1])))
+
+
+def run_session(ports):
+    send_hex(ports, SYSEX_PROGRAMMER)
+    time.sleep(0.2)
+    clear_all(ports)
+
+    note_binds, cc_binds = load_bindings()
+    conf_mtime = bindings_mtime()
+    state = (None, None, {}, {}, frozenset(), frozenset())
+    samples_on = False
+    drums_on = False
+    keys_on = False
+    user_ctrl = None   # None = user mode off; else [claude_names, hermes_names]
+    last_osc = 0.0
+    held = {}          # workspace note -> (press time, screen_idx, desktop)
+    grabbed = None     # internalId of the window active at last workspace press
+    last_action_ms = 0.0   # wall clock of our latest state-changing action
+    flashes = []  # (is_cc, id, restore_color, deadline)
+
+    seq = subprocess.Popen(
+        ["aseqdump", "-p", f"{SEQ_CLIENT}:0,{SEQ_CLIENT}:1"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    jrn = journal_follower()
+    log(f"connected on {ports}, {len(note_binds) + len(cc_binds)} command binding(s)")
+    light(ports, *state, note_binds, cc_binds, samples_on, drums_on, keys_on, user_ctrl)
+    run_kwin_script(os.path.join(SCRIPT_DIR, "padspace-events.js"),
+                    EVENTS_SCRIPT, "padspace-events")  # persistent, event-driven
+
+    def flash(is_cc, ident, color):
+        status = "B0" if is_cc else "90"
+        send_hex(ports, f"{status} {ident:02X} {COLOR_FLASH:02X}")
+        flashes.append((is_cc, ident, color, time.monotonic() + FLASH_SECS))
+
+    try:
+        last_poll = time.monotonic()
+        while True:
+            ready, _, _ = select.select([seq.stdout, jrn.stdout], [], [], 0.25)
+            if seq.stdout in ready:
+                line = seq.stdout.readline()
+                if not line:
+                    log("aseqdump ended (device unplugged?)")
+                    return
+                m = NOTE_RE.search(line)
+                if m:
+                    note, vel = int(m.group(2)), int(m.group(3))
+                    if vel > 0:
+                        if note in GRID_S0 or note in GRID_S1:
+                            scr = 0 if note in GRID_S0 else 1
+                            desk = (GRID_S0 if scr == 0 else GRID_S1)[note]
+                            grabbed = None
+                            held[note] = (time.monotonic(), scr, desk)
+                            last_action_ms = time.time() * 1000
+                            switch(scr, desk)
+                            # optimistic: light immediately; events confirm async
+                            s = list(state)
+                            if s[scr] is not None:
+                                s[scr] = desk
+                                state = tuple(s)
+                            light(ports, *state, note_binds, cc_binds, samples_on, drums_on, keys_on, user_ctrl)
+                        elif keys_on and note in NUMPAD:
+                            press_digit(NUMPAD[note])
+                        elif drums_on and note in DRUM_PADS:
+                            play_drum(note)
+                        elif user_ctrl is not None and 11 <= note <= 28:
+                            row_idx, i = (0, note - 11) if note <= 18 else (1, note - 21)
+                            if i < len(user_ctrl[row_idx]):
+                                color = COLOR_CLAUDE if row_idx == 0 else COLOR_HERMES
+                                flash(False, note, color)
+                                launch_skill(row_idx, user_ctrl[row_idx][i])
+                        elif note in note_binds:
+                            if note in GATED_NOTES and not samples_on:
+                                log(f"pad {note} ignored (samples disarmed; "
+                                    f"toggle with Session button cc{TOGGLE_CC})")
+                            else:
+                                color, cmd = note_binds[note]
+                                flash(False, note, color)
+                                log(f"pad {note}: {cmd}")
+                                run_command(cmd)
+                        else:
+                            log(f"unbound pad note {note} pressed")
+                elif (m := NOTE_OFF_RE.search(line)):
+                    note = int(m.group(1))
+                    if note in held:
+                        pressed_at, scr, desk = held.pop(note)
+                        if (time.monotonic() - pressed_at >= HOLD_MOVE_SECS
+                                and grabbed and grabbed != "none"):
+                            last_action_ms = time.time() * 1000
+                            move_window(grabbed, scr, desk)
+                            log(f"held pad {note}: moved window to screen {scr} desktop {desk}")
+                            flash(False, note, COLOR_ACTIVE)
+                        grabbed = None
+                else:
+                    m = CC_RE.search(line)
+                    if m and int(m.group(3)) > 0:
+                        cc = int(m.group(2))
+                        if cc in ARROW_CCS:
+                            press_arrow(cc)
+                        elif cc == TOGGLE_CC:
+                            samples_on = not samples_on
+                            if samples_on:
+                                drums_on = keys_on = False
+                                user_ctrl = None
+                            log(f"sample row {'ARMED' if samples_on else 'disarmed'}")
+                            clear_all(ports)
+                            light(ports, *state, note_binds, cc_binds, samples_on, drums_on, keys_on, user_ctrl)
+                        elif cc == DRUMS_CC:
+                            drums_on = not drums_on
+                            if drums_on:
+                                samples_on = keys_on = False
+                                user_ctrl = None
+                                upload_drumkit()
+                            log(f"drum kit {'ON' if drums_on else 'off'}")
+                            clear_all(ports)
+                            light(ports, *state, note_binds, cc_binds, samples_on, drums_on, keys_on, user_ctrl)
+                        elif cc == KEYS_CC:
+                            keys_on = not keys_on
+                            if keys_on:
+                                samples_on = drums_on = False
+                                user_ctrl = None
+                            log(f"numpad {'ON' if keys_on else 'off'}")
+                            clear_all(ports)
+                            light(ports, *state, note_binds, cc_binds, samples_on, drums_on, keys_on, user_ctrl)
+                        elif cc == USER_CC:
+                            user_ctrl = load_ctrl() if user_ctrl is None else None
+                            if user_ctrl is not None:
+                                samples_on = drums_on = keys_on = False
+                                log(f"skill launcher ON: claude={user_ctrl[0]} hermes={user_ctrl[1]}")
+                            else:
+                                log("skill launcher off")
+                            clear_all(ports)
+                            light(ports, *state, note_binds, cc_binds, samples_on, drums_on, keys_on, user_ctrl)
+                        elif cc in cc_binds:
+                            color, cmd = cc_binds[cc]
+                            flash(True, cc, color)
+                            log(f"button cc{cc}: {cmd}")
+                            run_command(cmd)
+                        else:
+                            log(f"unbound control cc{cc} pressed")
+            if jrn.stdout in ready:
+                line = jrn.stdout.readline()
+                if not line:
+                    log("journal follower ended, restarting session")
+                    return
+                gm = GRAB_RE.search(line)
+                if gm:
+                    grabbed = gm.group(1)
+                parsed = parse_state(line)
+                if parsed:
+                    t_ms, data = parsed
+                    # drop reports generated before our latest action — a late
+                    # pre-press report must not drag the LEDs backwards
+                    if t_ms and t_ms < last_action_ms:
+                        pass
+                    elif data != state:
+                        state = data
+                        light(ports, *state, note_binds, cc_binds, samples_on, drums_on, keys_on, user_ctrl)
+            now = time.monotonic()
+            if keys_on and now - last_osc >= OSC_TICK_SECS:
+                last_osc = now
+                numpad_rgb(ports, now)
+            for f in flashes[:]:
+                is_cc, ident, color, deadline = f
+                if now >= deadline:
+                    send_hex(ports, f"{'B0' if is_cc else '90'} {ident:02X} {color:02X}")
+                    flashes.remove(f)
+            if now - last_poll >= POLL_SECS:
+                last_poll = now
+                request_state()
+                if bindings_mtime() != conf_mtime:
+                    conf_mtime = bindings_mtime()
+                    note_binds, cc_binds = load_bindings()
+                    clear_all(ports)
+                    light(ports, *state, note_binds, cc_binds, samples_on, drums_on, keys_on, user_ctrl)
+                    log(f"bindings reloaded: {len(note_binds) + len(cc_binds)} command binding(s)")
+    finally:
+        busctl("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting",
+               "unloadScript", "s", "padspace-events")
+        seq.terminate()
+        jrn.terminate()
+
+
+def main():
+    ports = []
+
+    def restore(signum, frame):
+        if ports:
+            send_hex(ports, SYSEX_LIVE)
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, restore)
+    signal.signal(signal.SIGINT, restore)
+
+    announced = False
+    while True:
+        ports[:] = amidi_ports()
+        if not ports:
+            if not announced:
+                log("waiting for Launchpad...")
+                announced = True
+            time.sleep(3)
+            continue
+        announced = False
+        try:
+            run_session(ports)
+        except Exception as e:
+            log(f"session error: {e}")
+        time.sleep(3)
+
+
+if __name__ == "__main__":
+    main()

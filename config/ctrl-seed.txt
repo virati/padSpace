@@ -1,0 +1,8 @@
+1-constellupdates -> /var/home/vinConst/.claude/skills/constellupdates
+2-coremap -> /var/home/vinConst/.claude/skills/coremap
+3-padspace -> /var/home/vinConst/.claude/skills/padspace
+4-linear-issue -> /var/home/vinConst/.claude/skills/linear-issue
+1-research -> /var/home/vinConst/.hermes/skills/research
+2-productivity -> /var/home/vinConst/.hermes/skills/productivity
+3-note-taking -> /var/home/vinConst/.hermes/skills/note-taking
+4-devops -> /var/home/vinConst/.hermes/skills/devops
