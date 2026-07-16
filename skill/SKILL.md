@@ -29,7 +29,12 @@ eDP-1 (index 1, right/laptop). NOTE: Mini MK3 pads have NO velocity sensing —
 always 127 — so velocity gestures are impossible; hold duration is the
 substitute.
 Per pad: current desktop = white (3) > marker color > occupied = dim white (1)
-> empty = unlit. Occupancy comes from `W0=`/`W1=` reporter tokens. Missing
+> empty = unlit. Windows with `demandsAttention` (alert/urgency) flash their
+pad high/low of its computed color: ch1 note-on = dim variant, ch2 note-on
+(0x91) = bright — the device alternates them automatically. Palette rule:
+bright N dims to N+2 (white 3 → 1), `dim_variant()`. Reporter tokens U0=/U1=
+per screen; events script hooks `w.demandsAttentionChanged`. The property is
+also WRITABLE from KWin scripts (handy for testing). Occupancy comes from `W0=`/`W1=` reporter tokens. Missing
 screen 1 → right grid dark.
 Idle pads dim white; app markers color occupied pads via the `MARKERS`
 list — `(target, js_regex, palette_color)` per rule, target "class" matches

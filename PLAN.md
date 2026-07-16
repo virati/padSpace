@@ -21,7 +21,8 @@ Launchpad Mini MK3 as a desk controller for KDE Plasma:
    worklog+Slack together cyan — per screen (a window only marks the grid of
    the display it is on). Multiple marked workspaces per app supported.
    Updates are event-driven (~10 ms; persistent KWin signal listener), with a
-   5 s poll as fallback.
+   5 s poll as fallback. Windows demanding attention (alerts) hardware-flash
+   their workspace pad between bright/dim of its current color.
 3. **Command pads** — any other pad/round button can run a shell command via
    `~/.config/padspace/bindings.conf` (hot-reloaded, `<button> [@color] = cmd`).
    Current binding: pad 18 → "science, bitch!" TTS sample.
