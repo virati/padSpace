@@ -151,6 +151,7 @@ for (let s = 0; s < scrs.length && s < 2; s++) {
 const rules = [%s];
 let hits = rules.map(function() { return [[], []]; });
 let occ = [[], []];
+let urg = [[], []];
 for (const w of workspace.windowList()) {
   if (!w.normalWindow) continue;
   let sidx = -1;
@@ -161,6 +162,8 @@ for (const w of workspace.windowList()) {
   const desks = w.onAllDesktops ? workspace.desktops : w.desktops;
   for (const d of desks) {
     if (occ[sidx].indexOf(d.x11DesktopNumber) < 0) occ[sidx].push(d.x11DesktopNumber);
+    if (w.demandsAttention && urg[sidx].indexOf(d.x11DesktopNumber) < 0)
+      urg[sidx].push(d.x11DesktopNumber);
   }
   const c = ("" + w.resourceClass).toLowerCase();
   const cap = ("" + w.caption).toLowerCase();
@@ -174,6 +177,8 @@ for (const w of workspace.windowList()) {
 }
 parts.push("W0=" + occ[0].join(","));
 parts.push("W1=" + occ[1].join(","));
+parts.push("U0=" + urg[0].join(","));
+parts.push("U1=" + urg[1].join(","));
 for (let i = 0; i < rules.length; i++) {
   parts.push("M" + i + "S0=" + hits[i][0].join(","));
   parts.push("M" + i + "S1=" + hits[i][1].join(","));
@@ -198,6 +203,7 @@ function padspaceHook(w) {
   try { w.desktopsChanged.connect(padspaceReport); } catch (e) {}
   try { w.captionChanged.connect(padspaceReport); } catch (e) {}
   try { w.outputChanged.connect(padspaceReport); } catch (e) {}
+  try { w.demandsAttentionChanged.connect(padspaceReport); } catch (e) {}
 }
 try { workspace.currentDesktopChanged.connect(padspaceReport); } catch (e) {}
 try {
@@ -426,11 +432,21 @@ def clear_all(ports):
     send_hex(ports, " ".join(msg))
 
 
-def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, note_binds, cc_binds,
+def dim_variant(color):
+    """Low-brightness sibling of a palette color. Launchpad palette groups hues
+    in quads: bright index N has a dim sibling at N+2. White (3) dims to 1."""
+    if color in (COLOR_ACTIVE, COLOR_IDLE):
+        return 0x01
+    return color + 2
+
+
+def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, urg0, urg1,
+          note_binds, cc_binds,
           samples_on=False, drums_on=False, keys_on=False, user_ctrl=None):
     msg = []
-    for grid, cur, marked, occ in ((GRID_S0, cur0, marked0, occ0),
-                                   (GRID_S1, cur1, marked1, occ1)):
+    flash_msg = []
+    for grid, cur, marked, occ, urg in ((GRID_S0, cur0, marked0, occ0, urg0),
+                                        (GRID_S1, cur1, marked1, occ1, urg1)):
         for note, desk in grid.items():
             if cur is None:          # screen not connected: grid dark
                 color = 0x00
@@ -442,7 +458,13 @@ def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, note_binds, cc_binds,
                 color = COLOR_IDLE
             else:                    # empty workspace: unlit
                 color = 0x00
-            msg += ["90", f"{note:02X}", f"{color:02X}"]
+            if color and desk in urg:
+                # window demands attention: hardware-flash high/low of the
+                # pad's color (ch1 static = dim, ch2 flash = bright)
+                msg += ["90", f"{note:02X}", f"{dim_variant(color):02X}"]
+                flash_msg += ["91", f"{note:02X}", f"{color:02X}"]
+            else:
+                msg += ["90", f"{note:02X}", f"{color:02X}"]
     for note, (color, _) in note_binds.items():
         if note in GATED_NOTES and not samples_on:
             color = 0x00
@@ -481,6 +503,7 @@ def parse_state(line):
     cur = [None, None]
     marked = [{}, {}]
     occupied = [set(), set()]
+    urgent = [set(), set()]
     t_ms = 0.0
     for tok in m.group(1).split():
         if tok.startswith("T="):
@@ -493,6 +516,10 @@ def parse_state(line):
         mm = re.match(r"W([01])=(.+)", tok)
         if mm:
             occupied[int(mm.group(1))] = {int(n) for n in mm.group(2).split(",")}
+            continue
+        mm = re.match(r"U([01])=(.+)", tok)
+        if mm:
+            urgent[int(mm.group(1))] = {int(n) for n in mm.group(2).split(",")}
             continue
         mm = re.match(r"M(\d+)S([01])=(.+)", tok)
         if mm:
@@ -509,7 +536,8 @@ def parse_state(line):
 
     marked = [{desk: resolve(rules) for desk, rules in m.items()} for m in marked]
     return (t_ms, (cur[0], cur[1], marked[0], marked[1],
-                   frozenset(occupied[0]), frozenset(occupied[1])))
+                   frozenset(occupied[0]), frozenset(occupied[1]),
+                   frozenset(urgent[0]), frozenset(urgent[1])))
 
 
 def run_session(ports):
@@ -519,7 +547,7 @@ def run_session(ports):
 
     note_binds, cc_binds = load_bindings()
     conf_mtime = bindings_mtime()
-    state = (None, None, {}, {}, frozenset(), frozenset())
+    state = (None, None, {}, {}, frozenset(), frozenset(), frozenset(), frozenset())
     samples_on = False
     drums_on = False
     keys_on = False
