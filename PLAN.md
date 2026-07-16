@@ -31,9 +31,10 @@ Launchpad Mini MK3 as a desk controller for KDE Plasma:
    16-pad EDM kit (3 kicks + sub-drop + snare/clap/hats/crash/toms/percussion),
    preloaded into PipeWire for low-latency overlapping hits. Amber = on.
    Mutually exclusive with the Session gate.
-6. **Numpad mode** (Keys button, cc97) — bottom-left 3×3 pads become a
-   digit pad (numpad layout), typing via ydotoold; pads breathe green at
-   1/N Hz each. Exclusive with Session gate and Drum mode.
+6. **Numpad mode** (Keys button, cc97) — bottom-left 3×4 pads become a
+   digit pad (numpad layout, wide zero across the bottom three pads), typing
+   via ydotoold; digit pads breathe green at 1/N Hz each, zero steady (0 Hz).
+   Exclusive with Session gate and Drum mode.
 7. **Arrow buttons** (round row 1 cols 1–4, cc91–94, printed ↑↓←→) — send
    real keyboard arrow-key events to the focused window via a user-level
    ydotoold (virtual uinput keyboard).
