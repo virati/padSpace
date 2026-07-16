@@ -53,10 +53,12 @@ grants the seated user `/dev/uinput` access by ACL, so no root needed). One
 event per press; no key repeat on hold.
 
 **Numpad mode — the Keys button** (round top row, 7th from left, cc97) turns
-the bottom-left 3×3 pads into a numpad (7 8 9 / 4 5 6 / 1 2 3, matching a real
-numpad top-to-bottom). Presses type the digit via ydotoold. Each pad breathes
-green at 1/N Hz — pad N cycles once every N seconds — driven by per-pad RGB
-SysEx frames every 0.25 s. Mutually exclusive with Session gate and Drum mode.
+the bottom-left 3×4 pads into a numpad: 7 8 9 / 4 5 6 / 1 2 3, with a wide
+**0** spanning all three bottom pads (like a real numpad's 0 key). Presses
+type the digit via ydotoold. Each digit pad breathes green at 1/N Hz — pad N
+cycles once every N seconds; the zero row, at 1/0 = 0 Hz, glows steady —
+driven by per-pad RGB SysEx frames every 0.25 s. Mutually exclusive with
+Session gate and Drum mode.
 
 **Skill launcher — the User button** (round top row, 8th from left, cc98)
 turns the bottom two rows into agent-skill launchers, read fresh from

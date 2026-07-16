@@ -85,13 +85,19 @@ YDOTOOL_SOCKET = os.path.join(
 COLOR_ARROW = 1   # dim white: always available, caps carry the glyphs
 
 # Keys mode: the "Keys" round button (row 1, col 7 = CC 97) turns the bottom-
-# left 3x3 pads into a numpad (numpad layout: 7 8 9 on top, 1 2 3 on the
-# bottom). Presses type the digit via ydotoold. Each pad breathes green at
-# 1/N Hz (pad N has an N-second sine period) using per-pad RGB SysEx.
-# Mutually exclusive with the Session gate and Drum mode (shared pads).
+# left 3x4 pads into a numpad (numpad layout: 7 8 9 on top, then 4 5 6,
+# 1 2 3, and a wide ZERO spanning all three bottom pads — like a real
+# numpad's 0 key). Presses type the digit via ydotoold. Each digit pad
+# breathes green at 1/N Hz (N-second sine period); zero is 1/0 Hz = 0 Hz,
+# i.e. steady. Mutually exclusive with Session gate and Drum mode.
 KEYS_CC = 97
 COLOR_KEYS_ON = 21    # green while numpad active
-NUMPAD = {11: 1, 12: 2, 13: 3, 21: 4, 22: 5, 23: 6, 31: 7, 32: 8, 33: 9}
+NUMPAD = {
+    41: 7, 42: 8, 43: 9,
+    31: 4, 32: 5, 33: 6,
+    21: 1, 22: 2, 23: 3,
+    11: 0, 12: 0, 13: 0,   # wide zero
+}
 OSC_TICK_SECS = 0.25  # RGB refresh cadence for the oscillation
 
 # User mode: the "User" round button (row 1, col 8 = CC 98) turns the bottom
@@ -328,7 +334,8 @@ def press_arrow(cc):
 
 
 def press_digit(digit):
-    press_key(digit + 1)   # Linux input keycodes: KEY_1=2 ... KEY_9=10
+    # Linux input keycodes: KEY_1=2 ... KEY_9=10, KEY_0=11
+    press_key(11 if digit == 0 else digit + 1)
 
 
 def load_ctrl():
@@ -358,7 +365,10 @@ def numpad_rgb(ports, now):
     with an N-second period (frequency 1/N Hz)."""
     body = []
     for note, n in NUMPAD.items():
-        g = int(24 + 100 * (0.5 + 0.5 * math.sin(2 * math.pi * now / n)))
+        if n == 0:   # 1/0 Hz: zero frequency = steady glow
+            g = 110
+        else:
+            g = int(24 + 100 * (0.5 + 0.5 * math.sin(2 * math.pi * now / n)))
         body += ["03", f"{note:02X}", "00", f"{g:02X}", "08"]
     send_hex(ports, "F0 00 20 29 02 0D 03 " + " ".join(body) + " F7")
 

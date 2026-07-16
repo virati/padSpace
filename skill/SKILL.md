@@ -73,9 +73,9 @@ removing it reintroduces visible LED flip-backs. The one-shot reporter poll
 (5 s) is only a safety net.
 
 **Numpad mode:** Keys button (row 1 col 7, cc97, `KEYS_CC`) → bottom-left
-3×3 pads (`NUMPAD`: notes 11-13/21-23/31-33 = digits 1-9, numpad layout with
-789 on top) type digits via ydotoold (keycode = digit+1). LEDs breathe green
-sinusoidally at 1/N Hz per pad N via RGB SysEx
+3×4 pads (`NUMPAD`: 41-43=789, 31-33=456, 21-23=123, 11-13 all = wide ZERO)
+type digits via ydotoold (keycode = digit+1, except KEY_0=11). Digit LEDs breathe green
+sinusoidally at 1/N Hz per pad N (zero row: 0 Hz = steady, g=110) via RGB SysEx
 (`F0 00 20 29 02 0D 03 (03 <note> <R> <G> <B>)... F7`, values 0-127), refreshed
 every 0.25 s from the daemon loop (`numpad_rgb`). Exclusive with Session/Drums.
 cc91–97 all reserved.
