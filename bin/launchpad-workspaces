@@ -706,6 +706,12 @@ def run_session(ports):
                     flashes.remove(f)
             if now - last_poll >= POLL_SECS:
                 last_poll = now
+                # aseqdump does NOT exit when the device unplugs (its seq
+                # client just vanishes), so actively verify the ports still
+                # exist; on any change, tear down and reconnect fresh.
+                if amidi_ports() != ports:
+                    log("device ports changed (unplug/replug?), reconnecting")
+                    return
                 request_state()
                 if bindings_mtime() != conf_mtime:
                     conf_mtime = bindings_mtime()

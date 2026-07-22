@@ -176,7 +176,12 @@ does install + enable + restart in one shot.
    means USB/ALSA can't see it (`cat /proc/asound/cards`, look for `MK3`).
 2. Button press logged as "unmapped"/"unbound" → not in GRID_S0/GRID_S1 or
    bindings.conf; add it where it belongs.
-3. Nothing logged on press → device not in programmer mode or aseqdump lost the
-   port; restart the unit (it re-sends the mode SysEx).
-4. Container tools needed: alsa-utils + systemd (both already installed in claudebox);
+3. Nothing logged on press → device not in programmer mode or aseqdump lost
+   the port; restart the unit (it re-sends the mode SysEx).
+4. Pad in factory mode after unplug/replug → aseqdump does NOT exit when the
+   device vanishes (its seq client disappears silently), so EOF-based detection
+   never fires. The daemon's 5 s poll compares `amidi_ports()` against the
+   session's ports and reconnects on any change — if this regresses, that
+   check is the place to look.
+5. Container tools needed: alsa-utils + systemd (both already installed in claudebox);
    `/dev/snd` and the user D-Bus are shared with the host.
