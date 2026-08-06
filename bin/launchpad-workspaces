@@ -20,13 +20,16 @@ config are picked up automatically within a few seconds. Unknown presses are
 logged with their ID: journalctl --user -u launchpad-workspaces -f
 """
 
+import json
 import math
 import os
 import re
 import select
+import shlex
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 DEVICE_MATCH = "LPMiniMK3"
@@ -56,6 +59,13 @@ MARKERS = [
 MARKER_COMBOS = {
     frozenset({1, 2}): 37,   # worklog green + slack blue -> cyan
 }
+# Background/helper windows that report as normalWindow but have no visible
+# content of their own — excluded from occupancy tracking entirely (not just
+# markers) so they don't make an empty desktop show up as dim-white
+# "occupied". Found via a real case: xwaylandvideobridge (the Wayland-to-X11
+# recording bridge) sat on a desktop with nothing else on it, and the pad for
+# that desktop stayed dim white even though switching to it showed nothing.
+OCCUPANCY_EXCLUDE_CLASSES = ["xwaylandvideobridge"]
 COLOR_FLASH = 3       # white press feedback
 FLASH_SECS = 0.35
 POLL_SECS = 5.0   # safety-net only; the persistent KWin event script does real-time updates
@@ -66,13 +76,8 @@ POLL_SECS = 5.0   # safety-net only; the persistent KWin event script does real-
 # desktop and screen (the switch already happened at press, so you land with it).
 HOLD_MOVE_SECS = 0.55
 
-# Sample-row gate: the "Session" round button (row 1, col 5 = CC 95) toggles
-# whether bindings on the bottom pad row fire. Starts disarmed on every
-# daemon start. Button LED: dim white = off, bright purple = armed.
-TOGGLE_CC = 95
-GATED_NOTES = range(11, 19)   # bottom pad row
-COLOR_TOGGLE_ON = 53
-COLOR_TOGGLE_OFF = 1
+# Off-state color shared by all mode-toggle round buttons (dim white).
+COLOR_MODE_OFF = 1
 
 # Arrow buttons: the four round buttons at row 1 cols 1-4 (cc91-94, printed
 # with arrow glyphs on the device) emit real keyboard arrow-key events via a
@@ -89,7 +94,7 @@ COLOR_ARROW = 1   # dim white: always available, caps carry the glyphs
 # 1 2 3, and a wide ZERO spanning all three bottom pads — like a real
 # numpad's 0 key). Presses type the digit via ydotoold. Each digit pad
 # breathes green at 1/N Hz (N-second sine period); zero is 1/0 Hz = 0 Hz,
-# i.e. steady. Mutually exclusive with Session gate and Drum mode.
+# i.e. steady. Mutually exclusive with Drums/Session/User.
 KEYS_CC = 97
 COLOR_KEYS_ON = 21    # green while numpad active
 NUMPAD = {
@@ -100,26 +105,32 @@ NUMPAD = {
 }
 OSC_TICK_SECS = 0.25  # RGB refresh cadence for the oscillation
 
-# User mode: the "User" round button (row 1, col 8 = CC 98) turns the bottom
-# two pad rows into skill launchers, read from ~/.ctrl at each toggle-on:
+# User mode (skill launcher): the "User" round button (row 1, col 8 = CC 98)
+# toggles the bottom two pad rows into a skill launcher, read from ~/.ctrl on
+# each toggle-on:
 #   ~/.ctrl/claude/  -> bottom row (11-18), launches Claude Code with /skill
 #   ~/.ctrl/hermes/  -> second row (21-28), launches Hermes with that skill
 # Entries are files/symlinks; sorted by name, an optional "N-" prefix orders
-# them and is stripped to get the skill name. Max 8 per row.
-# Mutually exclusive with Session gate, Drum mode, and Keys mode.
+# them and is stripped to get the skill name. Max 8 per row. Off (the
+# default, including at daemon start) = bottom rows dark, only the workspace
+# grid (top two rows) is active. Mutually exclusive with Drums/Keys/Session.
+# (Moved here from the Session button 2026-08-05 — Session is freed up below
+# for a planned "track ongoing agentic sessions across local and Polaris"
+# feature, not yet built.)
 USER_CC = 98
 CTRL_DIR = os.path.expanduser("~/.ctrl")
 COLOR_CLAUDE = 9      # amber row for Claude Code skills
 COLOR_HERMES = 45     # blue row for Hermes skills
-COLOR_USER_ON = 3     # white while user mode active
+COLOR_USER_ON = 3     # white while the skill launcher is active
 CLAUDE_CMD = 'konsole -e distrobox enter claudebox -- claude "/{name}"'
 HERMES_CMD = 'konsole -e ' + os.path.expanduser("~/.local/bin/hermes") + ' --skills {name} chat'
 
-# Drum mode: the "Drums" round button (row 1, col 6 = CC 96) turns the bottom
-# TWO pad rows into a sampler kit. Samples are preloaded into PipeWire-Pulse
-# (pactl upload-sample) for low-latency triggering. Mutually exclusive with
-# the Session sample-row gate. WAVs live in DRUMKIT_DIR; replace a file and
-# re-toggle drum mode to swap a pad's sound.
+# Drum mode: the "Drums" round button (row 1, col 6 = CC 96) toggles the
+# bottom TWO pad rows into a sampler kit. Samples are preloaded into
+# PipeWire-Pulse (pactl upload-sample) for low-latency triggering. Mutually
+# exclusive with Keys/Session/User; turning Drums off returns to the same
+# dark default as the others off (just the workspace grid). WAVs live in
+# DRUMKIT_DIR; replace a file and re-toggle drum mode to swap a pad's sound.
 DRUMS_CC = 96
 COLOR_DRUMS_ON = 9    # amber while kit active
 DRUMKIT_DIR = os.path.expanduser("~/.local/share/padspace/drumkit")
@@ -131,6 +142,40 @@ DRUM_PADS = {
     21: ("sub-drop", 45), 22: ("tom-low", 41), 23: ("tom-high", 40), 24: ("shaker", 21),
     25: ("pluck", 53), 26: ("snap", 57), 27: ("ride", 2), 28: ("reverse-cymbal", 58),
 }
+
+# Session mode: the "Session" round button (row 1, col 5 = CC 95) toggles the
+# bottom two pad rows into an agentic-session tracker:
+#   bottom row (11-18)  -> local `claude` processes (ps comm == "claude")
+#   second row (21-28)  -> Vin's own `claude` processes on Polaris (SSH alias
+#                          "polaris"; filtered to POLARIS_USER — other users'
+#                          sessions there are deliberately not surfaced)
+# Each lit pad is one session, colored by the sentiment of its last message:
+# green = last turn had no tool error, red = last tool_result had is_error,
+# dim white = session detected but its transcript couldn't be read yet.
+# Sentiment/session_id come from the newest *.jsonl under
+# ~/.claude/projects/<cwd-with-/-as-->/ for that process's cwd (same encoding
+# Claude Code itself uses). Press a lit pad: for a local session, try to
+# find+focus the window whose process tree contains that pid (KWin exposes
+# window pid, but only for the terminal emulator, so we walk /proc ancestry
+# from the claude pid up and match); if no window is found (or the session is
+# on Polaris, which never has a local window), open a new konsole running
+# `claude --resume <session_id>` (over SSH for Polaris) instead. Polled every
+# SESSION_POLL_SECS locally; Polaris is polled in a background thread
+# (POLARIS_POLL_SECS) started on toggle-on and stopped on toggle-off, so a
+# slow/unreachable SSH round trip never blocks the rest of the pad.
+SESSION_CC = 95
+COLOR_SESSION_ON = 3     # white while active
+COLOR_SESSION_POS = 21   # green: last message had no tool error
+COLOR_SESSION_NEG = 5    # red: last tool_result was an error
+COLOR_SESSION_UNKNOWN = 1  # dim white: session seen but transcript unreadable
+SESSION_LOCAL_BASE = 11   # bottom row
+SESSION_POLARIS_BASE = 21  # second row
+SESSION_POLL_SECS = 3.0
+POLARIS_HOST = "polaris"
+POLARIS_USER = "vineet"
+POLARIS_POLL_SECS = 6.0
+POLARIS_SSH_TIMEOUT = 6
+CLAUDE_PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
 
 SYSEX_PROGRAMMER = "F0 00 20 29 02 0D 0E 01 F7"
 SYSEX_LIVE = "F0 00 20 29 02 0D 0E 00 F7"
@@ -148,12 +193,14 @@ let parts = ["T=" + Date.now()];
 for (let s = 0; s < scrs.length && s < 2; s++) {
   parts.push("S" + s + "=" + workspace.currentDesktopForScreen(scrs[s]).x11DesktopNumber);
 }
-const rules = [%s];
+const rules = [%(rules)s];
 let hits = rules.map(function() { return [[], []]; });
 let occ = [[], []];
 let urg = [[], []];
+const excludeRe = %(exclude_re)s;
 for (const w of workspace.windowList()) {
   if (!w.normalWindow) continue;
+  if (excludeRe.test(("" + w.resourceClass).toLowerCase())) continue;
   let sidx = -1;
   for (let s = 0; s < scrs.length && s < 2; s++) {
     if (w.output && w.output.name === scrs[s].name) sidx = s;
@@ -187,9 +234,12 @@ console.error("PADSPACE-STATE " + parts.join(" "));
 }
 """
 
-_REPORT_FN = REPORTER_TEMPLATE % ", ".join(
-    "{t:%d, re:/%s/}" % (0 if target == "class" else 1, rx)
-    for target, rx, _ in MARKERS)
+_REPORT_FN = REPORTER_TEMPLATE % {
+    "rules": ", ".join(
+        "{t:%d, re:/%s/}" % (0 if target == "class" else 1, rx)
+        for target, rx, _ in MARKERS),
+    "exclude_re": "/(%s)/i" % "|".join(OCCUPANCY_EXCLUDE_CLASSES) if OCCUPANCY_EXCLUDE_CLASSES else "/(?!)/",
+}
 
 # One-shot reporter (poll fallback).
 REPORTER = _REPORT_FN + "\npadspaceReport();\n"
@@ -366,6 +416,312 @@ def launch_skill(row_idx, name):
     run_command(cmd)
 
 
+def find_transcript(cwd):
+    """-> newest *.jsonl for this cwd's Claude Code project dir, or None."""
+    proj_dir = os.path.join(CLAUDE_PROJECTS_DIR, cwd.replace("/", "-"))
+    try:
+        files = [os.path.join(proj_dir, f) for f in os.listdir(proj_dir) if f.endswith(".jsonl")]
+    except FileNotFoundError:
+        return None
+    return max(files, key=os.path.getmtime) if files else None
+
+
+def transcript_sentiment(path):
+    """-> 'pos'/'neg' from the last message's last tool_result (is_error?),
+    'pos' if the last message has no tool_result, None if unreadable/empty."""
+    if not path:
+        return None
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - 8000))
+            chunk = f.read().decode("utf-8", "ignore")
+    except OSError:
+        return None
+    for ln in reversed(chunk.splitlines()):
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            d = json.loads(ln)
+        except ValueError:
+            continue
+        content = d.get("message", {}).get("content")
+        if not isinstance(content, list):
+            return "pos"
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                return "neg" if block.get("is_error") in (True, "True", "true") else "pos"
+        return "pos"
+    return None
+
+
+def local_claude_sessions():
+    """-> [{pid, cwd, source, sentiment, session_id, mtime}] for each
+    locally running `claude` process (ps comm == "claude")."""
+    try:
+        out = subprocess.run(["ps", "-eo", "pid,comm"], capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return []
+    sessions = []
+    for ln in out.splitlines()[1:]:
+        parts = ln.split(None, 1)
+        if len(parts) != 2 or parts[1].strip() != "claude":
+            continue
+        pid = int(parts[0])
+        try:
+            cwd = os.readlink(f"/proc/{pid}/cwd")
+        except OSError:
+            continue
+        path = find_transcript(cwd)
+        sessions.append({
+            "pid": pid, "cwd": cwd, "source": "local",
+            "sentiment": transcript_sentiment(path),
+            "session_id": os.path.splitext(os.path.basename(path))[0] if path else None,
+            "mtime": os.path.getmtime(path) if path else 0,
+        })
+    return sessions
+
+
+def process_ancestors(pid):
+    """-> set of ancestor pids of `pid` (including itself) via /proc/*/stat.
+    KWin only exposes a window's own process pid (the terminal emulator), not
+    the shell/claude process running inside it, so activation matches by
+    walking up from the claude pid instead."""
+    ancestors = set()
+    cur = pid
+    for _ in range(30):
+        if cur in ancestors:
+            break
+        ancestors.add(cur)
+        try:
+            with open(f"/proc/{cur}/stat") as f:
+                fields = f.read().rsplit(")", 1)[-1].split()
+            ppid = int(fields[1])
+        except (OSError, IndexError, ValueError):
+            break
+        if ppid <= 1:
+            break
+        cur = ppid
+    return ancestors
+
+
+# Remote counterpart of find_transcript/transcript_sentiment/local_claude_sessions,
+# run on Polaris over SSH (python3 fed on stdin) so a session poll is one round
+# trip regardless of how many sessions are found. Prints "pid|sentiment|sid|cwd".
+REMOTE_SESSION_SCRIPT = r'''
+import glob, json, os, subprocess
+
+def sentiment(cwd):
+    proj = os.path.expanduser("~/.claude/projects/" + cwd.replace("/", "-"))
+    files = glob.glob(proj + "/*.jsonl")
+    if not files:
+        return "?", None
+    path = max(files, key=os.path.getmtime)
+    sid = os.path.splitext(os.path.basename(path))[0]
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 8000))
+            chunk = f.read().decode("utf-8", "ignore")
+    except OSError:
+        return "?", sid
+    for ln in reversed(chunk.splitlines()):
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            d = json.loads(ln)
+        except ValueError:
+            continue
+        content = d.get("message", {}).get("content")
+        if not isinstance(content, list):
+            return "pos", sid
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                return ("neg" if block.get("is_error") in (True, "True", "true") else "pos"), sid
+        return "pos", sid
+    return "?", sid
+
+out = subprocess.run(["pgrep", "-u", "%(user)s", "-x", "claude"], capture_output=True, text=True).stdout
+for pid in out.split():
+    try:
+        cwd = os.readlink("/proc/" + pid + "/cwd")
+    except OSError:
+        continue
+    s, sid = sentiment(cwd)
+    print(pid, s, sid or "", cwd, sep="|")
+'''
+
+_polaris_lock = threading.Lock()
+_polaris_sessions = []
+_polaris_stop = threading.Event()
+
+
+def poll_polaris_once():
+    script = REMOTE_SESSION_SCRIPT % {"user": POLARIS_USER}
+    try:
+        out = subprocess.run(
+            ["ssh", "-o", f"ConnectTimeout={POLARIS_SSH_TIMEOUT}", "-o", "BatchMode=yes",
+             POLARIS_HOST, "python3", "-"],
+            input=script, capture_output=True, text=True,
+            timeout=POLARIS_SSH_TIMEOUT + 2).stdout
+    except Exception as e:
+        log(f"polaris poll failed: {e}")
+        return []
+    sessions = []
+    for ln in out.splitlines():
+        parts = ln.split("|", 3)
+        if len(parts) != 4:
+            continue
+        pid, sentiment, sid, cwd = parts
+        sessions.append({
+            "pid": int(pid), "cwd": cwd, "source": "polaris",
+            "sentiment": sentiment if sentiment != "?" else None,
+            "session_id": sid or None, "mtime": 0,
+        })
+    return sessions
+
+
+def polaris_poller_loop():
+    while not _polaris_stop.is_set():
+        sessions = poll_polaris_once()
+        with _polaris_lock:
+            _polaris_sessions[:] = sessions
+        _polaris_stop.wait(POLARIS_POLL_SECS)
+
+
+def polaris_sessions_snapshot():
+    with _polaris_lock:
+        return list(_polaris_sessions)
+
+
+def sentiment_color(sentiment):
+    if sentiment == "pos":
+        return COLOR_SESSION_POS
+    if sentiment == "neg":
+        return COLOR_SESSION_NEG
+    return COLOR_SESSION_UNKNOWN
+
+
+def group_sessions_by_cwd(sessions):
+    """Multiple pids can share the exact same cwd (e.g. two terminals open in
+    the same project) and there's no reliable per-process signal to tell
+    which transcript belongs to which pid in that case (checked: no session-id
+    env var, no open fd to the transcript) — group them into one record per
+    cwd instead of showing N pads that would all guess the same transcript.
+    All pids in a group share cwd/sentiment/session_id; only "pids" differs."""
+    groups = {}
+    for s in sessions:
+        key = (s["source"], s["cwd"])
+        if key not in groups:
+            groups[key] = dict(s)
+            groups[key]["pids"] = [s["pid"]]
+        else:
+            groups[key]["pids"].append(s["pid"])
+    return list(groups.values())
+
+
+def build_session_map(local_sessions, polaris_sessions):
+    """-> {note: session_record}, up to 8 local (11-18) + 8 Polaris (21-28),
+    freshest transcript first; logs how many were dropped on overflow."""
+    session_map = {}
+    for base, sessions, label in (
+        (SESSION_LOCAL_BASE, group_sessions_by_cwd(local_sessions), "local"),
+        (SESSION_POLARIS_BASE, group_sessions_by_cwd(polaris_sessions), "Polaris"),
+    ):
+        ordered = sorted(sessions, key=lambda s: (-s.get("mtime", 0), s["pids"][0]))
+        if len(ordered) > 8:
+            log(f"session tracker: {len(ordered) - 8} {label} session(s) "
+                f"dropped (only 8 pad slots)")
+            ordered = ordered[:8]
+        for i, rec in enumerate(ordered):
+            session_map[base + i] = rec
+    return session_map
+
+
+ACTIVATE_WINDOW = """
+const pids = new Set([%(pids)s]);
+let found = false;
+for (const w of workspace.windowList()) {
+  if (!pids.has(w.pid)) continue;
+  const scrs = (workspace.screenOrder && workspace.screenOrder.length)
+    ? workspace.screenOrder : workspace.screens;
+  for (let s = 0; s < scrs.length; s++) {
+    if (w.output && w.output.name === scrs[s].name && w.desktops.length) {
+      workspace.setCurrentDesktopForScreen(w.desktops[0], scrs[s]);
+    }
+  }
+  workspace.activeWindow = w;
+  found = true;
+  break;
+}
+console.error("PADSPACE-ACTIVATE " + (found ? "hit" : "miss"));
+"""
+
+ACTIVATE_RE = re.compile(r"PADSPACE-ACTIVATE (hit|miss)")
+
+
+def try_activate_window(pids, jrn, timeout=0.4):
+    """Fire a one-shot KWin script that focuses the window whose pid is in
+    `pids` (a local claude pid's process ancestry). Returns True on a
+    reported hit. NOTE: reads directly from `jrn.stdout`, so it can consume a
+    STATE line the main loop would otherwise have processed on this pass —
+    acceptable since this only runs on a manual button press and the
+    event-driven reporter emits a fresh line on the very next change anyway."""
+    js = ACTIVATE_WINDOW % {"pids": ",".join(str(p) for p in pids)}
+    run_kwin_script(ACTION_JS, js, "padspace-action")
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        ready, _, _ = select.select([jrn.stdout], [], [], remaining)
+        if jrn.stdout not in ready:
+            return False
+        line = jrn.stdout.readline()
+        if not line:
+            return False
+        m = ACTIVATE_RE.search(line)
+        if m:
+            return m.group(1) == "hit"
+
+
+def open_local_session_window(rec):
+    if rec.get("session_id"):
+        cmd = (f'konsole --workdir {shlex.quote(rec["cwd"])} -e '
+               f'claude --resume {shlex.quote(rec["session_id"])}')
+    else:
+        cmd = f'konsole --workdir {shlex.quote(rec["cwd"])} -e claude'
+    log(f"session tracker: opening new window for local pid(s) {rec['pids']}")
+    run_command(cmd)
+
+
+def open_polaris_session_window(rec):
+    if rec.get("session_id"):
+        remote = f'cd {shlex.quote(rec["cwd"])} && claude --resume {shlex.quote(rec["session_id"])}'
+    else:
+        remote = f'cd {shlex.quote(rec["cwd"])} && claude'
+    cmd = f'konsole -e ssh -t {POLARIS_HOST} {shlex.quote(remote)}'
+    log(f"session tracker: opening new window (Polaris) for pid(s) {rec['pids']}")
+    run_command(cmd)
+
+
+def handle_session_press(rec, jrn):
+    if rec["source"] == "local":
+        ancestors = set()
+        for pid in rec["pids"]:
+            ancestors |= process_ancestors(pid)
+        if try_activate_window(ancestors, jrn):
+            log(f"session tracker: focused window for local pid(s) {rec['pids']}")
+        else:
+            open_local_session_window(rec)
+    else:
+        open_polaris_session_window(rec)
+
+
 def numpad_rgb(ports, now):
     """One SysEx frame of the numpad oscillation: pad N sine-breathes green
     with an N-second period (frequency 1/N Hz)."""
@@ -397,7 +753,7 @@ def load_bindings():
                 if not is_cc and num in WORKSPACE_NOTES:
                     log(f"bindings.conf:{ln}: note {num} is a workspace grid, ignored")
                     continue
-                if is_cc and num in (TOGGLE_CC, DRUMS_CC, KEYS_CC, USER_CC, *ARROW_CCS):
+                if is_cc and num in (SESSION_CC, DRUMS_CC, KEYS_CC, USER_CC, *ARROW_CCS):
                     log(f"bindings.conf:{ln}: cc{num} is reserved (mode toggle/arrow), ignored")
                     continue
                 (ccs if is_cc else notes)[num] = (color, cmd)
@@ -442,7 +798,8 @@ def dim_variant(color):
 
 def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, urg0, urg1,
           note_binds, cc_binds,
-          samples_on=False, drums_on=False, keys_on=False, user_ctrl=None):
+          drums_on=False, keys_on=False, user_ctrl=None, session_on=False,
+          session_map=None):
     msg = []
     flash_msg = []
     for grid, cur, marked, occ, urg in ((GRID_S0, cur0, marked0, occ0, urg0),
@@ -466,8 +823,6 @@ def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, urg0, urg1,
             else:
                 msg += ["90", f"{note:02X}", f"{color:02X}"]
     for note, (color, _) in note_binds.items():
-        if note in GATED_NOTES and not samples_on:
-            color = 0x00
         msg += ["90", f"{note:02X}", f"{color:02X}"]
     for cc, (color, _) in cc_binds.items():
         msg += ["B0", f"{cc:02X}", f"{color:02X}"]
@@ -483,14 +838,17 @@ def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, urg0, urg1,
             for i in range(8):
                 c = color if i < len(names) else 0x00
                 msg += ["90", f"{base + i:02X}", f"{c:02X}"]
-    toggle_color = COLOR_TOGGLE_ON if samples_on else COLOR_TOGGLE_OFF
-    msg += ["B0", f"{TOGGLE_CC:02X}", f"{toggle_color:02X}"]
-    drums_color = COLOR_DRUMS_ON if drums_on else COLOR_TOGGLE_OFF
+    if session_on and session_map:  # session-tracker rows: local bottom, Polaris above
+        for note, rec in session_map.items():
+            msg += ["90", f"{note:02X}", f"{sentiment_color(rec['sentiment']):02X}"]
+    drums_color = COLOR_DRUMS_ON if drums_on else COLOR_MODE_OFF
     msg += ["B0", f"{DRUMS_CC:02X}", f"{drums_color:02X}"]
-    keys_color = COLOR_KEYS_ON if keys_on else COLOR_TOGGLE_OFF
+    keys_color = COLOR_KEYS_ON if keys_on else COLOR_MODE_OFF
     msg += ["B0", f"{KEYS_CC:02X}", f"{keys_color:02X}"]
-    user_color = COLOR_USER_ON if user_ctrl is not None else COLOR_TOGGLE_OFF
+    user_color = COLOR_USER_ON if user_ctrl is not None else COLOR_MODE_OFF
     msg += ["B0", f"{USER_CC:02X}", f"{user_color:02X}"]
+    session_color = COLOR_SESSION_ON if session_on else COLOR_MODE_OFF
+    msg += ["B0", f"{SESSION_CC:02X}", f"{session_color:02X}"]
     for cc in ARROW_CCS:
         msg += ["B0", f"{cc:02X}", f"{COLOR_ARROW:02X}"]
     send_hex(ports, " ".join(msg))
@@ -548,10 +906,13 @@ def run_session(ports):
     note_binds, cc_binds = load_bindings()
     conf_mtime = bindings_mtime()
     state = (None, None, {}, {}, frozenset(), frozenset(), frozenset(), frozenset())
-    samples_on = False
     drums_on = False
     keys_on = False
-    user_ctrl = None   # None = user mode off; else [claude_names, hermes_names]
+    user_ctrl = None   # None = skill launcher off (default); else [claude_names, hermes_names]
+    session_on = False
+    session_map = {}   # note -> session record, rebuilt every SESSION_POLL_SECS while session_on
+    polaris_thread = None
+    last_session_poll = 0.0
     last_osc = 0.0
     held = {}          # workspace note -> (press time, screen_idx, desktop)
     grabbed = None     # internalId of the window active at last workspace press
@@ -563,7 +924,7 @@ def run_session(ports):
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     jrn = journal_follower()
     log(f"connected on {ports}, {len(note_binds) + len(cc_binds)} command binding(s)")
-    light(ports, *state, note_binds, cc_binds, samples_on, drums_on, keys_on, user_ctrl)
+    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map)
     run_kwin_script(os.path.join(SCRIPT_DIR, "padspace-events.js"),
                     EVENTS_SCRIPT, "padspace-events")  # persistent, event-driven
 
@@ -597,7 +958,7 @@ def run_session(ports):
                             if s[scr] is not None:
                                 s[scr] = desk
                                 state = tuple(s)
-                            light(ports, *state, note_binds, cc_binds, samples_on, drums_on, keys_on, user_ctrl)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map)
                         elif keys_on and note in NUMPAD:
                             press_digit(NUMPAD[note])
                         elif drums_on and note in DRUM_PADS:
@@ -608,15 +969,15 @@ def run_session(ports):
                                 color = COLOR_CLAUDE if row_idx == 0 else COLOR_HERMES
                                 flash(False, note, color)
                                 launch_skill(row_idx, user_ctrl[row_idx][i])
+                        elif session_on and note in session_map:
+                            rec = session_map[note]
+                            flash(False, note, sentiment_color(rec["sentiment"]))
+                            handle_session_press(rec, jrn)
                         elif note in note_binds:
-                            if note in GATED_NOTES and not samples_on:
-                                log(f"pad {note} ignored (samples disarmed; "
-                                    f"toggle with Session button cc{TOGGLE_CC})")
-                            else:
-                                color, cmd = note_binds[note]
-                                flash(False, note, color)
-                                log(f"pad {note}: {cmd}")
-                                run_command(cmd)
+                            color, cmd = note_binds[note]
+                            flash(False, note, color)
+                            log(f"pad {note}: {cmd}")
+                            run_command(cmd)
                         else:
                             log(f"unbound pad note {note} pressed")
                 elif (m := NOTE_OFF_RE.search(line)):
@@ -636,40 +997,60 @@ def run_session(ports):
                         cc = int(m.group(2))
                         if cc in ARROW_CCS:
                             press_arrow(cc)
-                        elif cc == TOGGLE_CC:
-                            samples_on = not samples_on
-                            if samples_on:
-                                drums_on = keys_on = False
-                                user_ctrl = None
-                            log(f"sample row {'ARMED' if samples_on else 'disarmed'}")
-                            clear_all(ports)
-                            light(ports, *state, note_binds, cc_binds, samples_on, drums_on, keys_on, user_ctrl)
                         elif cc == DRUMS_CC:
                             drums_on = not drums_on
                             if drums_on:
-                                samples_on = keys_on = False
+                                keys_on = session_on = False
                                 user_ctrl = None
+                                _polaris_stop.set()
+                                polaris_thread = None
+                                session_map = {}
                                 upload_drumkit()
                             log(f"drum kit {'ON' if drums_on else 'off'}")
                             clear_all(ports)
-                            light(ports, *state, note_binds, cc_binds, samples_on, drums_on, keys_on, user_ctrl)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map)
                         elif cc == KEYS_CC:
                             keys_on = not keys_on
                             if keys_on:
-                                samples_on = drums_on = False
+                                drums_on = session_on = False
                                 user_ctrl = None
+                                _polaris_stop.set()
+                                polaris_thread = None
+                                session_map = {}
                             log(f"numpad {'ON' if keys_on else 'off'}")
                             clear_all(ports)
-                            light(ports, *state, note_binds, cc_binds, samples_on, drums_on, keys_on, user_ctrl)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map)
                         elif cc == USER_CC:
                             user_ctrl = load_ctrl() if user_ctrl is None else None
                             if user_ctrl is not None:
-                                samples_on = drums_on = keys_on = False
+                                drums_on = keys_on = session_on = False
+                                _polaris_stop.set()
+                                polaris_thread = None
+                                session_map = {}
                                 log(f"skill launcher ON: claude={user_ctrl[0]} hermes={user_ctrl[1]}")
                             else:
                                 log("skill launcher off")
                             clear_all(ports)
-                            light(ports, *state, note_binds, cc_binds, samples_on, drums_on, keys_on, user_ctrl)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map)
+                        elif cc == SESSION_CC:
+                            session_on = not session_on
+                            if session_on:
+                                drums_on = keys_on = False
+                                user_ctrl = None
+                                _polaris_stop.clear()
+                                polaris_thread = threading.Thread(
+                                    target=polaris_poller_loop, daemon=True)
+                                polaris_thread.start()
+                                session_map = build_session_map(local_claude_sessions(), [])
+                                last_session_poll = time.monotonic()
+                            else:
+                                _polaris_stop.set()
+                                polaris_thread = None
+                                session_map = {}
+                            log(f"session tracker {'ON' if session_on else 'off'}: "
+                                f"{len(session_map)} session(s)")
+                            clear_all(ports)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map)
                         elif cc in cc_binds:
                             color, cmd = cc_binds[cc]
                             flash(True, cc, color)
@@ -694,11 +1075,17 @@ def run_session(ports):
                         pass
                     elif data != state:
                         state = data
-                        light(ports, *state, note_binds, cc_binds, samples_on, drums_on, keys_on, user_ctrl)
+                        light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map)
             now = time.monotonic()
             if keys_on and now - last_osc >= OSC_TICK_SECS:
                 last_osc = now
                 numpad_rgb(ports, now)
+            if session_on and now - last_session_poll >= SESSION_POLL_SECS:
+                last_session_poll = now
+                new_map = build_session_map(local_claude_sessions(), polaris_sessions_snapshot())
+                if new_map != session_map:
+                    session_map = new_map
+                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map)
             for f in flashes[:]:
                 is_cc, ident, color, deadline = f
                 if now >= deadline:
@@ -717,9 +1104,10 @@ def run_session(ports):
                     conf_mtime = bindings_mtime()
                     note_binds, cc_binds = load_bindings()
                     clear_all(ports)
-                    light(ports, *state, note_binds, cc_binds, samples_on, drums_on, keys_on, user_ctrl)
+                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map)
                     log(f"bindings reloaded: {len(note_binds) + len(cc_binds)} command binding(s)")
     finally:
+        _polaris_stop.set()
         busctl("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting",
                "unloadScript", "s", "padspace-events")
         seq.terminate()

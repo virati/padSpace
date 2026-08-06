@@ -38,8 +38,10 @@ is no plain D-Bus API for it.
 ```
 36 = konsole                      # pad note 36 launches konsole
 12 @13 = playerctl play-pause     # pad 12, lit yellow
-cc98 @5 = loginctl lock-session   # round button CC 98, lit red
 ```
+
+(all eight round buttons — cc91–98 — are reserved for arrows/modes; only grid
+pads outside the workspace rows are bindable)
 
 Bound buttons are lit (default blue) and flash white on press; commands run
 detached via `systemd-run --user`. The file hot-reloads within ~3 s. To learn
@@ -58,7 +60,7 @@ the bottom-left 3×4 pads into a numpad: 7 8 9 / 4 5 6 / 1 2 3, with a wide
 type the digit via ydotoold. Each digit pad breathes green at 1/N Hz — pad N
 cycles once every N seconds; the zero row, at 1/0 = 0 Hz, glows steady —
 driven by per-pad RGB SysEx frames every 0.25 s. Mutually exclusive with
-Session gate and Drum mode.
+Drums/Session/User.
 
 **Skill launcher — the User button** (round top row, 8th from left, cc98)
 turns the bottom two rows into agent-skill launchers, read fresh from
@@ -67,12 +69,19 @@ opens konsole → claudebox → `claude "/skill"`), `~/.ctrl/hermes/` the row
 above (blue, opens konsole → `hermes --skills <name> chat`). Entries are
 files/symlinks, sorted by name; a `N-` prefix orders and is stripped. Max 8
 per row; empty slots stay dark. Seeded assignments: `config/ctrl-seed.txt`.
-Exclusive with Session/Drums/Keys modes.
+Exclusive with Drums/Keys/Session.
 
-**Bottom-row bindings (notes 11–18) are gated behind the Session button**
-(round top row, 5th from left, cc95): press it to arm them (button glows
-purple, pads light up), press again to disarm (pads dark, presses ignored).
-Starts disarmed on every daemon start — no accidental soundboard in meetings.
+**Agentic-session tracker — the Session button** (round top row, 5th from
+left, cc95) turns the bottom two rows into a live map of running Claude Code
+sessions: bottom row = local `claude` processes, second row = your own
+processes on the `polaris` SSH host (other users there are deliberately not
+shown). Each lit pad is colored by the sentiment of that session's last
+message — green for no error, red for an error, dim white if unreadable.
+Press a lit pad to focus the window it's running in, or open a new one
+resuming that session if no window is found (always the case for Polaris).
+Full detail — the same-cwd ambiguity limitation, the polling architecture,
+window-matching mechanics — lives in `skill/SKILL.md`, not here. Exclusive
+with Drums/Keys/User.
 
 **Drum mode — the Drums button** (round top row, 6th from left, cc96) turns
 the bottom two pad rows into a 16-pad EDM kit: three kicks (punch/sub/hard),
@@ -80,7 +89,12 @@ snare, clap, hats, crash on the bottom row; sub-drop, toms, shaker, pluck,
 snap, ride, reverse cymbal above. Samples are synthesized by `tools/make-drumkit.py`
 (regenerate any time) and preloaded into PipeWire for low-latency, overlapping
 triggering. Swap any WAV in `~/.local/share/padspace/drumkit/` to upgrade a
-pad. Drum mode and the Session sample gate are mutually exclusive.
+pad. Mutually exclusive with Keys/Session/User.
+
+All four round mode buttons (Session/Drums/Keys/User, cc95-98) are real on/off
+toggles: off is a shared dark default (just the workspace grid), turning one
+on turns the other three off, and there's no "gate" concept anymore — that
+existed only on the Session button early on and was removed 2026-08-05.
 
 ## Setting up a new computer
 

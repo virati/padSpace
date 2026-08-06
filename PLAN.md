@@ -25,24 +25,30 @@ Launchpad Mini MK3 as a desk controller for KDE Plasma:
    their workspace pad between bright/dim of its current color.
 3. **Command pads** — any other pad/round button can run a shell command via
    `~/.config/padspace/bindings.conf` (hot-reloaded, `<button> [@color] = cmd`).
-   Current binding: pad 18 → "science, bitch!" TTS sample.
-4. **Session gate** (round button row 1 col 5, cc95) — arms/disarms bottom-row
-   command pads. Disarmed on every start. Purple = armed.
-5. **Drum mode** (round button row 1 col 6, cc96) — bottom two rows become a
+   No active bindings by default — all round buttons (cc91–98) are reserved
+   for arrows/modes, and the starter config ships with everything commented.
+4. **Drum mode** (round button row 1 col 6, cc96) — bottom two rows become a
    16-pad EDM kit (3 kicks + sub-drop + snare/clap/hats/crash/toms/percussion),
    preloaded into PipeWire for low-latency overlapping hits. Amber = on.
-   Mutually exclusive with the Session gate.
-6. **Numpad mode** (Keys button, cc97) — bottom-left 3×4 pads become a
+   Mutually exclusive with Keys/Session/User.
+5. **Numpad mode** (Keys button, cc97) — bottom-left 3×4 pads become a
    digit pad (numpad layout, wide zero across the bottom three pads), typing
    via ydotoold; digit pads breathe green at 1/N Hz each, zero steady (0 Hz).
-   Exclusive with Session gate and Drum mode.
-7. **Arrow buttons** (round row 1 cols 1–4, cc91–94, printed ↑↓←→) — send
+   Exclusive with Drums/Session/User.
+6. **Arrow buttons** (round row 1 cols 1–4, cc91–94, printed ↑↓←→) — send
    real keyboard arrow-key events to the focused window via a user-level
    ydotoold (virtual uinput keyboard).
-8. **Skill launcher** (User button, cc98) — bottom two rows launch Claude
+7. **Skill launcher** (User button, cc98) — bottom two rows launch Claude
    Code skills (bottom, amber) and Hermes skills (above, blue) in konsole
    windows, configured by symlinks in `~/.ctrl/claude/` and `~/.ctrl/hermes/`
-   (re-read at each toggle-on; `N-` prefixes order the pads).
+   (re-read at each toggle-on; `N-` prefixes order the pads). Exclusive with
+   Drums/Keys/Session.
+8. **Agentic-session tracker** (Session button, cc95) — bottom two rows show
+   local Claude Code sessions (bottom row) and your own sessions on the
+   `polaris` SSH host (second row), colored green/red/dim-white by the last
+   message's sentiment. Press a lit pad to focus its window or resume it in
+   a new one. Exclusive with Drums/Keys/User. Full mechanism in
+   `skill/SKILL.md` (same-cwd ambiguity handling, window-matching, polling).
 9. On stop/music use, the pad reverts to normal standalone mode.
 
 ## Requirements
@@ -97,8 +103,8 @@ survives unplug/replug.
 3. Press a right-grid pad → only the second display switches.
 4. Open VS Code somewhere → that workspace's pad turns red within ~3 s, on the
    grid of the display it's on. Slack → blue.
-5. Press Session (cc95) → pad 18 lights purple; press pad 18 → TTS plays;
-   press Session again → dark and inert.
+5. Press Session (cc95) → bottom two rows light with running Claude Code
+   sessions (green/red/dim-white); press Session again → dark and inert.
 6. Press Drums (cc96) → bottom two rows light as the kit; hits are
    low-latency and overlap; press again → back to normal.
 7. Hold a workspace pad ≥ ~0.55 s → the window that was focused at press time
@@ -131,7 +137,8 @@ survives unplug/replug.
 - `MARKERS` — app-marker rules: `(js_regex_on_window_class, led_color)`.
 - `DRUM_PADS` — pad → (sample name, color); WAV filenames in
   `~/.local/share/padspace/drumkit/` (drop in your own to upgrade sounds).
-- `TOGGLE_CC` / `DRUMS_CC` / `GATED_NOTES` — mode buttons and gated row.
+- `SESSION_CC` / `DRUMS_CC` / `KEYS_CC` / `USER_CC` — the four mode-toggle
+  round buttons (95-98).
 - `ARROW_CCS` — arrow buttons → Linux input keycodes (103/108/105/106).
 - `MARKER_COMBOS` — blend colors when one workspace matches several rules.
 - `HOLD_MOVE_SECS` — hold threshold for move-window-with-me (0.55 s).
