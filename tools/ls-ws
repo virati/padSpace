@@ -6,7 +6,11 @@ the kwin_wayland journal (KWin scripts have no other output channel), and
 enriches terminal/editor windows with the `claude` sessions running inside
 them by walking /proc ancestry.
 
+With --banner it instead throws a short summary of the current desktop onto
+the top of the screen for 30 seconds.
+
 Usage:  ls-ws [--json] [--all] [--timeout SECS]
+        ls-ws --banner [TEXT] [--banner-secs N] [--screen NAME]
 """
 import json
 import os
@@ -16,19 +20,38 @@ import time
 
 KWIN_UNIT = "plasma-kwin_wayland.service"
 SCRIPT_NAME = "wsprobe"
+BANNER_CLASS = "ls-ws-banner"
+BANNER_SECS = 30.0
+BANNER_MARGIN = 24
 # KWin runs on the host, where the real home is /var/home; inside the
 # claudebox toolbox /home/vinConst is the same tree under a different path.
 JS_PATH = os.path.realpath(os.path.expanduser("~/.local/share/wsprobe.js"))
 if JS_PATH.startswith("/home/") and os.path.isdir("/var/home"):
     JS_PATH = "/var" + JS_PATH
 
-JS = r"""
+# Windows that are never worth naming in a banner.
+BORING = {"xwaylandvideobridge", BANNER_CLASS}
+
+FRIENDLY = {
+    "org.kde.konsole": "Konsole",
+    "org.kde.dolphin": "Dolphin",
+    "google-chrome": "Chrome",
+    "org.mozilla.firefox": "Firefox",
+    "com.slack.Slack": "Slack",
+    "code": "VS Code",
+    "steam": "Steam",
+    "ai.elementlabs.lmstudio": "LM Studio",
+}
+
+PROBE_JS = r"""
 var out = [];
 var so = workspace.screenOrder || workspace.screens;
 var cur = [];
 for (var s = 0; s < so.length; s++) {
     cur.push(so[s].name + "=" + workspace.currentDesktopForScreen(so[s]).x11DesktopNumber);
 }
+var active = (workspace.activeWindow && workspace.activeWindow.output)
+    ? workspace.activeWindow.output.name : "";
 var ws = workspace.windowList();
 for (var i = 0; i < ws.length; i++) {
     var w = ws[i];
@@ -46,11 +69,46 @@ for (var i = 0; i < ws.length; i++) {
               w.pid,
               w.caption].join("|"));
 }
-console.error("WSPROBE-BEGIN|" + workspace.desktops.length + "|" + cur.join(",") + "|" + so.length);
+console.error("WSPROBE-BEGIN|" + workspace.desktops.length + "|" + cur.join(",")
+              + "|" + so.length + "|" + active);
 for (var k = 0; k < out.length; k++) console.error("WSPROBE-W|" + out[k]);
 console.error("WSPROBE-END");
 """
 
+# Wayland gives a client no way to place its own window, so the banner is
+# drawn wherever KWin first put it and moved here — the same geometry route
+# the daemon uses to shift windows between outputs.
+PLACE_JS = r"""
+var target = "%(screen)s";
+var margin = %(margin)d;
+var so = workspace.screenOrder || workspace.screens;
+var out = so[0];
+for (var i = 0; i < so.length; i++) if (so[i].name === target) out = so[i];
+var g = out.geometry;
+var placed = 0;
+var ws = workspace.windowList();
+for (var i = 0; i < ws.length; i++) {
+    var w = ws[i];
+    if (w.resourceClass !== "%(cls)s") continue;
+    var fg = w.frameGeometry;
+    var width = Math.min(fg.width, g.width - 2 * margin);
+    w.desktops = [workspace.currentDesktopForScreen(out)];
+    w.frameGeometry = {
+        x: g.x + Math.round((g.width - width) / 2),
+        y: g.y + margin,
+        width: width,
+        height: fg.height
+    };
+    w.keepAbove = true;
+    w.skipTaskbar = true;
+    w.skipPager = true;
+    w.skipSwitcher = true;
+    placed++;
+}
+console.error("WSPROBE-BEGIN|place");
+console.error("WSPROBE-W|" + placed);
+console.error("WSPROBE-END");
+"""
 
 USE_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
 
@@ -71,34 +129,39 @@ def busctl(*args):
         capture_output=True, text=True)
 
 
-def probe(timeout):
-    """Run the KWin probe and return its output lines."""
+def journal_cursor():
+    out = subprocess.run(
+        ["journalctl", "--user", "-u", KWIN_UNIT, "-n", "0",
+         "--show-cursor", "--no-pager"],
+        capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        if line.startswith("-- cursor: "):
+            return line[len("-- cursor: "):].strip()
+    die("could not read a journal cursor for " + KWIN_UNIT)
+
+
+def kwin_run(js, timeout):
+    """Run a KWin script and return the lines it reported.
+
+    KWin scripting has no return channel, so the script's console.error()
+    output is read back off the kwin_wayland journal.
+    """
     try:
-        with open(JS_PATH, "r") as fh:
+        with open(JS_PATH) as fh:
             current = fh.read()
     except OSError:
         current = None
-    if current != JS:
+    if current != js:
         os.makedirs(os.path.dirname(JS_PATH), exist_ok=True)
         with open(JS_PATH, "w") as fh:
-            fh.write(JS)
+            fh.write(js)
 
-    cur = subprocess.run(
-        ["journalctl", "--user", "-u", KWIN_UNIT, "-n", "0",
-         "--show-cursor", "--no-pager"],
-        capture_output=True, text=True)
-    cursor = ""
-    for line in cur.stdout.splitlines():
-        if line.startswith("-- cursor: "):
-            cursor = line[len("-- cursor: "):].strip()
-    if not cursor:
-        die("could not read a journal cursor for " + KWIN_UNIT)
-
+    cursor = journal_cursor()
     try:
         busctl("unloadScript", "s", SCRIPT_NAME)
         load = busctl("loadScript", "ss", JS_PATH, SCRIPT_NAME)
         if load.returncode != 0:
-            die("KWin refused the probe script: " + load.stderr.strip())
+            die("KWin refused the script: " + load.stderr.strip())
         # start() only starts scripts that are not already running, so this
         # does not disturb the persistent padspace-events script.
         busctl("start")
@@ -139,6 +202,7 @@ def parse(lines):
             name, num = tok.split("=", 1)
             current[name] = int(num)
     screens = [t.split("=")[0] for t in head[2].split(",") if "=" in t]
+    active_screen = head[4] if len(head) > 4 else ""
 
     windows = []
     for line in lines[1:]:
@@ -146,6 +210,8 @@ def parse(lines):
         if len(parts) < 7:
             continue
         _, desks, output, cls, state, pid, caption = parts
+        if cls == BANNER_CLASS:
+            continue
         windows.append({
             "desktops": [d for d in desks.split(",") if d],
             "screen": output,
@@ -154,7 +220,7 @@ def parse(lines):
             "pid": int(pid) if pid.isdigit() else None,
             "title": caption,
         })
-    return ndesk, screens, current, windows
+    return ndesk, screens, current, active_screen, windows
 
 
 def ancestors(pid, limit=12):
@@ -220,6 +286,69 @@ def attach_sessions(windows, sessions):
     return [s for s in sessions if s.get("orphan")]
 
 
+def summarise(desktop, screen, windows, limit=3, width=110):
+    """One very short line describing a desktop: what is on it, nothing else."""
+    here = [w for w in windows
+            if w["screen"] == screen
+            and (str(desktop) in w["desktops"] or "ALL" in w["desktops"])
+            and w["app"] not in BORING]
+    if not here:
+        return "D%d · empty" % desktop
+
+    seen, parts = set(), []
+    for w in here:
+        name = FRIENDLY.get(w["app"], w["app"])
+        if w["claude"]:
+            # A session in $HOME has no project to name, so just say what it is.
+            projects = sorted({"claude" if p == "~" else p.rsplit("/", 1)[-1]
+                               for p in w["claude"]})
+            name += " (%s)" % ", ".join(projects)
+        if name in seen:
+            continue
+        seen.add(name)
+        parts.append(name)
+
+    shown, rest = parts[:limit], len(parts) - limit
+    text = "D%d · %s" % (desktop, " · ".join(shown))
+    if rest > 0:
+        text += " · +%d more" % rest
+    return text if len(text) <= width else text[:width - 1] + "…"
+
+
+def banner_helper():
+    """Find ls-ws-banner next to this script, else on PATH."""
+    here = os.path.join(os.path.dirname(os.path.realpath(__file__)), "ls-ws-banner")
+    if os.access(here, os.X_OK):
+        return here
+    from shutil import which
+    found = which("ls-ws-banner")
+    if not found:
+        die("ls-ws-banner not found next to ls-ws or on PATH")
+    return found
+
+
+def show_banner(text, seconds, screen, timeout):
+    proc = subprocess.Popen(
+        [banner_helper(), text, str(seconds)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+
+    js = PLACE_JS % {"screen": screen, "margin": BANNER_MARGIN,
+                     "cls": BANNER_CLASS}
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            err = (proc.stderr.read() or "").strip()
+            die("banner helper exited early" + (": " + err if err else ""))
+        lines = kwin_run(js, timeout)
+        if len(lines) > 1 and lines[1] != "WSPROBE-W|0":
+            return True
+        time.sleep(0.05)
+    # The banner is up and readable, just wherever KWin first put it.
+    print("ls-ws: could not place the banner at the top of %s" % screen,
+          file=sys.stderr)
+    return False
+
+
 def render(ndesk, screens, current, windows, orphans, show_all):
     cur_txt = "  ".join("%s → desktop %d" % (s, current[s])
                         for s in screens if s in current)
@@ -231,7 +360,7 @@ def render(ndesk, screens, current, windows, orphans, show_all):
         if not here and not show_all:
             continue
         marks = [s for s in screens if current.get(s) == d]
-        tag = "  " + c("32", "\u2190 current on " + ", ".join(marks)) if marks else ""
+        tag = "  " + c("32", "← current on " + ", ".join(marks)) if marks else ""
         if not here:
             print("\n%s%s\n  (empty)" % (c("1", "Desktop %d" % d), tag))
             continue
@@ -255,40 +384,81 @@ def render(ndesk, screens, current, windows, orphans, show_all):
             print("  pid %-8d %s" % (s["pid"], s["cwd"]))
 
 
-def main():
-    argv = sys.argv[1:]
-    as_json = "--json" in argv
-    show_all = "--all" in argv
-    timeout = 3.0
-    if "--timeout" in argv:
-        try:
-            timeout = float(argv[argv.index("--timeout") + 1])
-        except (IndexError, ValueError):
-            die("--timeout needs a number of seconds")
-    for arg in argv:
+VALUE_FLAGS = ("--timeout", "--banner-secs", "--screen")
+BARE_FLAGS = ("--json", "--all", "--banner")
+
+
+def parse_args(argv):
+    opts = {"json": False, "all": False, "timeout": 3.0, "banner": False,
+            "banner_text": None, "banner_secs": BANNER_SECS, "screen": None}
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
         if arg in ("-h", "--help"):
             print(__doc__.strip())
-            return
-        if arg.startswith("-") and arg not in ("--json", "--all", "--timeout"):
-            if not arg.replace(".", "").isdigit():
-                die("unknown option " + arg)
+            sys.exit(0)
+        elif arg == "--json":
+            opts["json"] = True
+        elif arg == "--all":
+            opts["all"] = True
+        elif arg == "--banner":
+            opts["banner"] = True
+            # --banner takes optional text: the next argument, unless that is
+            # itself a flag.
+            if i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+                i += 1
+                opts["banner_text"] = argv[i]
+        elif arg in VALUE_FLAGS:
+            if i + 1 >= len(argv):
+                die("%s needs a value" % arg)
+            i += 1
+            if arg == "--screen":
+                opts["screen"] = argv[i]
+            else:
+                key = "timeout" if arg == "--timeout" else "banner_secs"
+                try:
+                    opts[key] = float(argv[i])
+                except ValueError:
+                    die("%s needs a number" % arg)
+        elif arg.startswith("-"):
+            die("unknown option " + arg)
+        else:
+            die("unexpected argument %r (banner text needs --banner)" % arg)
+        i += 1
+    if opts["banner_text"] is not None and not opts["banner"]:
+        die("banner text given without --banner")
+    return opts
 
-    ndesk, screens, current, windows = parse(probe(timeout))
+
+def main():
+    opts = parse_args(sys.argv[1:])
+
+    ndesk, screens, current, active_screen, windows = parse(
+        kwin_run(PROBE_JS, opts["timeout"]))
     orphans = attach_sessions(windows, claude_sessions())
 
-    if as_json:
-        for w in windows:
-            w.pop("claude_set", None)
+    if opts["banner"]:
+        screen = opts["screen"] or active_screen or (screens[0] if screens else "")
+        if screen not in screens:
+            die("no such screen %r (have: %s)" % (screen, ", ".join(screens)))
+        text = opts["banner_text"] or summarise(
+            current.get(screen, 0), screen, windows)
+        show_banner(text, opts["banner_secs"], screen, opts["timeout"])
+        print("%s  (%s, %gs)" % (text, screen, opts["banner_secs"]))
+        return
+
+    if opts["json"]:
         print(json.dumps({
             "desktops": ndesk,
             "screens": screens,
+            "active_screen": active_screen,
             "current": current,
             "windows": windows,
             "claude_without_window": [
                 {"pid": s["pid"], "cwd": s["cwd"]} for s in orphans],
         }, indent=2))
     else:
-        render(ndesk, screens, current, windows, orphans, show_all)
+        render(ndesk, screens, current, windows, orphans, opts["all"])
 
 
 if __name__ == "__main__":

@@ -117,6 +117,7 @@ and the screens at runtime.
 - Daemon: `~/.local/bin/launchpad-workspaces` (python3, stdlib only)
 - Unit:   `~/.config/systemd/user/launchpad-workspaces.service` (enabled, WantedBy=graphical-session.target)
 - `ls-ws`: `~/.local/bin/ls-ws` (python3, stdlib only) — see below
+- Banner helper: `~/.local/bin/ls-ws-banner` (python3 + GTK 3 via `gi`)
 
 This repo holds reference copies in `bin/`, `tools/` and `systemd/`. `logs/` has the full
 Claude Code session transcript that built this (also covers the same-day boot-loop
@@ -133,6 +134,35 @@ ls-ws --all        # include empty desktops
 ls-ws --json       # machine-readable, includes window pids
 ls-ws --timeout 5  # default 3s
 ```
+
+### The banner
+
+`ls-ws --banner` puts one very short line about the current desktop at the top
+of the screen for 30 seconds — what the grid says in LEDs, said in words:
+
+```sh
+ls-ws --banner                    # auto: "D5 · VS Code (participant-tasks) · Chrome"
+ls-ws --banner "deep work: trace" # your own text instead
+ls-ws --banner --banner-secs 10   # default 30
+ls-ws --banner --screen eDP-1     # default: the screen holding the active window
+```
+
+Click it to dismiss early. The auto text names up to three distinct apps on
+that desktop and that screen, annotated with the project of any `claude`
+session running inside them, then `+N more`.
+
+Drawing it takes a second process, `tools/ls-ws-banner`, because the daemon's
+stdlib-only rule cannot draw a window — it uses GTK 3 via `python3-gobject`,
+which is already on the host and in the toolbox (PySide6 is not on the host,
+so it is not an option). Wayland gives a client no way to place its own
+window, so the helper only draws; `ls-ws` then centres it at the top of the
+target screen with a KWin script that sets `frameGeometry`, `keepAbove` and
+`skipTaskbar` — the same geometry route the daemon uses to move windows
+between outputs, and for the same reason. If placement fails the banner is
+still up and readable, just wherever KWin first put it.
+
+`ls-ws` hides the banner window from its own listing by resourceClass, so
+`--banner` never shows you the banner.
 
 It uses the same channel the daemon does — a one-shot KWin script whose
 `console.error()` lands in the `plasma-kwin_wayland` journal — so it inherits
