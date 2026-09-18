@@ -9,11 +9,14 @@ them by walking /proc ancestry.
 With --banner it instead throws a short summary of the current desktop onto
 the top of the screen for 30 seconds.
 
-Usage:  ls-ws [--json] [--all] [--timeout SECS]
+Usage:  ls-ws [--desc] [--all] [--json] [--timeout SECS]
         ls-ws --banner [TEXT] [--banner-secs N] [--screen NAME]
+
+  --desc  put a one-line summary of each desktop next to its heading
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -286,30 +289,86 @@ def attach_sessions(windows, sessions):
     return [s for s in sessions if s.get("orphan")]
 
 
-def summarise(desktop, screen, windows, limit=3, width=110):
-    """One very short line describing a desktop: what is on it, nothing else."""
+HOME_BASE = os.path.basename(os.path.expanduser("~"))
+# Sitting in a container directory says nothing about what you are doing.
+GENERIC_DIRS = {HOME_BASE.lower(), "projects", "repos", "src", "code", "work",
+                "downloads", "documents", "tmp", "home", "~"}
+REPO_RE = re.compile(r"\b([\w.-]+)/([\w.-]{2,})\b")
+KONSOLE_RE = re.compile(r"^(?P<cwd>.+?) : \S+ [—-] Konsole$")
+SSH_RE = re.compile(r"^\(\w+\) [\d.]+")
+BROWSERS = {"google-chrome", "org.mozilla.firefox"}
+
+
+def subject(window):
+    """What a window is *about*, or None if its title says nothing useful.
+
+    All of this is heuristic title-reading; callers fall back to the app name.
+    """
+    app, title = window["app"], window["title"]
+
+    if window["claude"]:
+        return [("claude" if p == "~" else p.rsplit("/", 1)[-1])
+                for p in window["claude"]]
+
+    if app == "code":
+        name = title.rsplit(" - Visual Studio Code", 1)[0].strip()
+        return [name] if name and name != title else None
+
+    if app == "org.kde.konsole":
+        if SSH_RE.match(title):
+            return ["ssh"]
+        m = KONSOLE_RE.match(title)
+        if m and m.group("cwd").lower() not in GENERIC_DIRS:
+            return [m.group("cwd")]
+        return None
+
+    if app in BROWSERS:
+        low = title.lower()
+        if " mail - " in low or low.startswith("inbox"):
+            return ["mail"]
+        if " - calendar - " in low:
+            return ["calendar"]
+        if "| notion" in low:
+            return ["Notion"]
+        m = REPO_RE.search(title)
+        if m:
+            return [m.group(2)]
+        return None
+
+    return None
+
+
+def summarise(desktop, screen, windows, limit=3, width=110, prefix=True):
+    """One very short line describing a desktop: what is on it, nothing else.
+
+    screen=None summarises the desktop across every screen, which is what the
+    listing wants; the banner passes a screen because it only covers one.
+    """
     here = [w for w in windows
-            if w["screen"] == screen
+            if (screen is None or w["screen"] == screen)
             and (str(desktop) in w["desktops"] or "ALL" in w["desktops"])
             and w["app"] not in BORING]
+    head = "D%d · " % desktop if prefix else ""
     if not here:
-        return "D%d · empty" % desktop
+        return head + "empty"
 
-    seen, parts = set(), []
+    # A window contributes what it is about; failing that, what it is. Real
+    # subjects come first so "leaddbs" outranks a bare "Chrome", and within
+    # those the subject the most windows share leads — a desktop with a repo
+    # open in both an editor and a browser is mostly about that repo.
+    order, counts, specific = {}, {}, {}
     for w in here:
-        name = FRIENDLY.get(w["app"], w["app"])
-        if w["claude"]:
-            # A session in $HOME has no project to name, so just say what it is.
-            projects = sorted({"claude" if p == "~" else p.rsplit("/", 1)[-1]
-                               for p in w["claude"]})
-            name += " (%s)" % ", ".join(projects)
-        if name in seen:
-            continue
-        seen.add(name)
-        parts.append(name)
+        found = subject(w)
+        for name in (found or [FRIENDLY.get(w["app"], w["app"])]):
+            key = name.lower()
+            order.setdefault(key, (len(order), name))
+            counts[key] = counts.get(key, 0) + 1
+            specific[key] = specific.get(key, False) or bool(found)
 
+    parts = [order[k][1] for k in sorted(
+        order, key=lambda k: (not specific[k], -counts[k], order[k][0]))]
     shown, rest = parts[:limit], len(parts) - limit
-    text = "D%d · %s" % (desktop, " · ".join(shown))
+    text = head + " · ".join(shown)
     if rest > 0:
         text += " · +%d more" % rest
     return text if len(text) <= width else text[:width - 1] + "…"
@@ -349,7 +408,7 @@ def show_banner(text, seconds, screen, timeout):
     return False
 
 
-def render(ndesk, screens, current, windows, orphans, show_all):
+def render(ndesk, screens, current, windows, orphans, show_all, show_desc):
     cur_txt = "  ".join("%s → desktop %d" % (s, current[s])
                         for s in screens if s in current)
     print("%s · now: %s" % (c("1", "%d desktops" % ndesk), cur_txt))
@@ -361,10 +420,14 @@ def render(ndesk, screens, current, windows, orphans, show_all):
             continue
         marks = [s for s in screens if current.get(s) == d]
         tag = "  " + c("32", "← current on " + ", ".join(marks)) if marks else ""
+        desc = ""
+        if show_desc:
+            desc = "  " + c("2", "— " + summarise(
+                d, None, windows, width=72, prefix=False))
         if not here:
-            print("\n%s%s\n  (empty)" % (c("1", "Desktop %d" % d), tag))
+            print("\n%s%s%s\n  (empty)" % (c("1", "Desktop %d" % d), desc, tag))
             continue
-        print("\n%s%s" % (c("1", "Desktop %d" % d), tag))
+        print("\n%s%s%s" % (c("1", "Desktop %d" % d), desc, tag))
         for w in sorted(here, key=lambda x: (x["screen"], x["app"])):
             extra = []
             if w["minimized"]:
@@ -385,12 +448,12 @@ def render(ndesk, screens, current, windows, orphans, show_all):
 
 
 VALUE_FLAGS = ("--timeout", "--banner-secs", "--screen")
-BARE_FLAGS = ("--json", "--all", "--banner")
 
 
 def parse_args(argv):
-    opts = {"json": False, "all": False, "timeout": 3.0, "banner": False,
-            "banner_text": None, "banner_secs": BANNER_SECS, "screen": None}
+    opts = {"json": False, "all": False, "desc": False, "timeout": 3.0,
+            "banner": False, "banner_text": None,
+            "banner_secs": BANNER_SECS, "screen": None}
     i = 0
     while i < len(argv):
         arg = argv[i]
@@ -401,6 +464,8 @@ def parse_args(argv):
             opts["json"] = True
         elif arg == "--all":
             opts["all"] = True
+        elif arg == "--desc":
+            opts["desc"] = True
         elif arg == "--banner":
             opts["banner"] = True
             # --banner takes optional text: the next argument, unless that is
@@ -448,7 +513,7 @@ def main():
         return
 
     if opts["json"]:
-        print(json.dumps({
+        payload = {
             "desktops": ndesk,
             "screens": screens,
             "active_screen": active_screen,
@@ -456,9 +521,15 @@ def main():
             "windows": windows,
             "claude_without_window": [
                 {"pid": s["pid"], "cwd": s["cwd"]} for s in orphans],
-        }, indent=2))
+        }
+        if opts["desc"]:
+            payload["descriptions"] = {
+                str(d): summarise(d, None, windows, prefix=False)
+                for d in range(1, ndesk + 1)}
+        print(json.dumps(payload, indent=2))
     else:
-        render(ndesk, screens, current, windows, orphans, opts["all"])
+        render(ndesk, screens, current, windows, orphans,
+               opts["all"], opts["desc"])
 
 
 if __name__ == "__main__":

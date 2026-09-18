@@ -130,10 +130,34 @@ in text: which windows are on which desktop, on which screen.
 
 ```sh
 ls-ws              # grouped by desktop, colour when stdout is a tty
+ls-ws --desc       # one-line summary beside each Desktop heading
 ls-ws --all        # include empty desktops
 ls-ws --json       # machine-readable, includes window pids
 ls-ws --timeout 5  # default 3s
 ```
+
+### `--desc`, and what a desktop is "about"
+
+```
+Desktop 4  — attractor-screensaver · Notion · claude
+Desktop 5  — participant-tasks · constellation-portal
+Desktop 8  — leaddbs · e_harness · Slack · +1 more   ← current on HDMI-A-1, eDP-1
+```
+
+Each window contributes what it is *about* rather than what it is: the project
+of a `claude` session, a VS Code window's project, a Konsole's working
+directory, an `owner/repo` in a browser title, or a recognised service (mail,
+calendar, Notion). A window whose title says nothing useful falls back to its
+app name, and those sort last — so `leaddbs` outranks a bare `Chrome`.
+
+Within the real subjects, the one the most windows share leads: a desktop with
+a repo open in both an editor and a browser is mostly about that repo. Sitting
+in a container directory (`Projects`, `src`, `$HOME`) is not a subject, so
+those fall back to the app name too.
+
+All of it is heuristic title-reading, and titles lie — a browser caption is
+only ever the *active* tab. It is a glance, not an index. The same summary is
+what `--banner` puts on screen, so the two always agree.
 
 ### The banner
 
