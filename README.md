@@ -116,10 +116,47 @@ and the screens at runtime.
 
 - Daemon: `~/.local/bin/launchpad-workspaces` (python3, stdlib only)
 - Unit:   `~/.config/systemd/user/launchpad-workspaces.service` (enabled, WantedBy=graphical-session.target)
+- `ls-ws`: `~/.local/bin/ls-ws` (python3, stdlib only) — see below
 
-This repo holds reference copies in `bin/` and `systemd/`. `logs/` has the full
+This repo holds reference copies in `bin/`, `tools/` and `systemd/`. `logs/` has the full
 Claude Code session transcript that built this (also covers the same-day boot-loop
 debugging and the Vortex keymap work).
+
+## `ls-ws` — what is on each desktop, from the terminal
+
+`tools/ls-ws` answers the same question the pad grid answers with its LEDs, but
+in text: which windows are on which desktop, on which screen.
+
+```sh
+ls-ws              # grouped by desktop, colour when stdout is a tty
+ls-ws --all        # include empty desktops
+ls-ws --json       # machine-readable, includes window pids
+ls-ws --timeout 5  # default 3s
+```
+
+It uses the same channel the daemon does — a one-shot KWin script whose
+`console.error()` lands in the `plasma-kwin_wayland` journal — so it inherits
+the same constraint: there is no other way to get a value back out of KWin
+scripting. It grabs a journal cursor, loads and starts the probe under its own
+script name (`wsprobe`), then reads back from that cursor. Runs in ~120 ms.
+
+Two things make it fast, both worth keeping:
+
+- **Poll, do not follow.** `journalctl -f` costs a flat ~490 ms here — it falls
+  back to a 500 ms wait rather than waking on inotify. Re-reading
+  `--after-cursor` in a short backoff loop lands in ~30 ms.
+- KWin itself needs ~28 ms to run the probe and emit; the rest is ~17 ms python
+  startup, ~7 ms cursor read, ~12 ms for the three `busctl` calls.
+
+It also walks `/proc` ancestry to attach each running `claude` process to the
+window it lives inside — KWin only exposes a window's own pid (the terminal
+emulator), never the shell or the process inside it, the same limitation the
+Session-mode tracker works around. That is how a VS Code window gets labelled
+with the projects of the sessions running in its integrated terminals.
+
+The probe unloads itself in a `finally`, and `start()` only starts scripts that
+are not already running, so it never disturbs the persistent `padspace-events`
+script the daemon relies on.
 
 ## How it works
 

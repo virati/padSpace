@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+"""List what is on each KDE virtual desktop, per screen.
+
+Queries KWin over D-Bus with a one-shot scripting probe, reads the reply off
+the kwin_wayland journal (KWin scripts have no other output channel), and
+enriches terminal/editor windows with the `claude` sessions running inside
+them by walking /proc ancestry.
+
+Usage:  ls-ws [--json] [--all] [--timeout SECS]
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+
+KWIN_UNIT = "plasma-kwin_wayland.service"
+SCRIPT_NAME = "wsprobe"
+# KWin runs on the host, where the real home is /var/home; inside the
+# claudebox toolbox /home/vinConst is the same tree under a different path.
+JS_PATH = os.path.realpath(os.path.expanduser("~/.local/share/wsprobe.js"))
+if JS_PATH.startswith("/home/") and os.path.isdir("/var/home"):
+    JS_PATH = "/var" + JS_PATH
+
+JS = r"""
+var out = [];
+var so = workspace.screenOrder || workspace.screens;
+var cur = [];
+for (var s = 0; s < so.length; s++) {
+    cur.push(so[s].name + "=" + workspace.currentDesktopForScreen(so[s]).x11DesktopNumber);
+}
+var ws = workspace.windowList();
+for (var i = 0; i < ws.length; i++) {
+    var w = ws[i];
+    if (!w.normalWindow) continue;
+    var ds = [];
+    if (w.onAllDesktops) {
+        ds.push("ALL");
+    } else if (w.desktops) {
+        for (var j = 0; j < w.desktops.length; j++) ds.push(w.desktops[j].x11DesktopNumber);
+    }
+    out.push([ds.join(","),
+              (w.output && w.output.name) ? w.output.name : "?",
+              w.resourceClass,
+              w.minimized ? "min" : "vis",
+              w.pid,
+              w.caption].join("|"));
+}
+console.error("WSPROBE-BEGIN|" + workspace.desktops.length + "|" + cur.join(",") + "|" + so.length);
+for (var k = 0; k < out.length; k++) console.error("WSPROBE-W|" + out[k]);
+console.error("WSPROBE-END");
+"""
+
+
+USE_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+
+
+def c(code, text):
+    return "\033[%sm%s\033[0m" % (code, text) if USE_COLOR else text
+
+
+def die(msg, code=1):
+    print("ls-ws: " + msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def busctl(*args):
+    return subprocess.run(
+        ["busctl", "--user", "call", "org.kde.KWin", "/Scripting",
+         "org.kde.kwin.Scripting"] + list(args),
+        capture_output=True, text=True)
+
+
+def probe(timeout):
+    """Run the KWin probe and return its output lines."""
+    try:
+        with open(JS_PATH, "r") as fh:
+            current = fh.read()
+    except OSError:
+        current = None
+    if current != JS:
+        os.makedirs(os.path.dirname(JS_PATH), exist_ok=True)
+        with open(JS_PATH, "w") as fh:
+            fh.write(JS)
+
+    cur = subprocess.run(
+        ["journalctl", "--user", "-u", KWIN_UNIT, "-n", "0",
+         "--show-cursor", "--no-pager"],
+        capture_output=True, text=True)
+    cursor = ""
+    for line in cur.stdout.splitlines():
+        if line.startswith("-- cursor: "):
+            cursor = line[len("-- cursor: "):].strip()
+    if not cursor:
+        die("could not read a journal cursor for " + KWIN_UNIT)
+
+    try:
+        busctl("unloadScript", "s", SCRIPT_NAME)
+        load = busctl("loadScript", "ss", JS_PATH, SCRIPT_NAME)
+        if load.returncode != 0:
+            die("KWin refused the probe script: " + load.stderr.strip())
+        # start() only starts scripts that are not already running, so this
+        # does not disturb the persistent padspace-events script.
+        busctl("start")
+
+        # Poll rather than `journalctl -f`: follow mode falls back to a 500 ms
+        # wait on this machine, while a fresh read lands in ~30 ms.
+        deadline = time.monotonic() + timeout
+        delay = 0.0
+        while time.monotonic() < deadline:
+            if delay:
+                time.sleep(delay)
+            delay = min(delay * 1.6 + 0.004, 0.05)
+            out = subprocess.run(
+                ["journalctl", "--user", "-u", KWIN_UNIT, "--after-cursor",
+                 cursor, "-o", "cat", "--no-pager"],
+                capture_output=True, text=True).stdout
+            if "WSPROBE-END" not in out:
+                continue
+            lines, started = [], False
+            for line in out.splitlines():
+                if line.startswith("WSPROBE-BEGIN"):
+                    lines, started = [line], True
+                elif started and line.startswith("WSPROBE-W|"):
+                    lines.append(line)
+                elif started and line == "WSPROBE-END":
+                    return lines
+        die("timed out after %gs waiting for KWin to answer" % timeout)
+    finally:
+        busctl("unloadScript", "s", SCRIPT_NAME)
+
+
+def parse(lines):
+    head = lines[0].split("|")
+    ndesk = int(head[1])
+    current = {}
+    for tok in head[2].split(","):
+        if "=" in tok:
+            name, num = tok.split("=", 1)
+            current[name] = int(num)
+    screens = [t.split("=")[0] for t in head[2].split(",") if "=" in t]
+
+    windows = []
+    for line in lines[1:]:
+        parts = line.split("|", 6)
+        if len(parts) < 7:
+            continue
+        _, desks, output, cls, state, pid, caption = parts
+        windows.append({
+            "desktops": [d for d in desks.split(",") if d],
+            "screen": output,
+            "app": cls,
+            "minimized": state == "min",
+            "pid": int(pid) if pid.isdigit() else None,
+            "title": caption,
+        })
+    return ndesk, screens, current, windows
+
+
+def ancestors(pid, limit=12):
+    """Walk up /proc parent links, yielding each ancestor pid."""
+    out = []
+    for _ in range(limit):
+        try:
+            with open("/proc/%d/stat" % pid) as fh:
+                # comm may contain spaces and parens; ppid is the field after
+                # the state letter that follows the final ')'.
+                data = fh.read()
+            ppid = int(data[data.rindex(")") + 2:].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+        if ppid <= 1:
+            break
+        out.append(ppid)
+        pid = ppid
+    return out
+
+
+def claude_sessions():
+    """Map each running `claude` process to its cwd and ancestor pids."""
+    home = os.path.expanduser("~")
+    sessions = []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        try:
+            with open("/proc/%d/comm" % pid) as fh:
+                if fh.read().strip() != "claude":
+                    continue
+            cwd = os.readlink("/proc/%d/cwd" % pid)
+        except OSError:
+            continue
+        short = cwd
+        for prefix in ("/var" + home, home):
+            if short == prefix:
+                short = "~"
+                break
+            if short.startswith(prefix + "/"):
+                short = "~" + short[len(prefix):]
+                break
+        sessions.append({"pid": pid, "cwd": short, "ancestors": set(ancestors(pid))})
+    return sessions
+
+
+def attach_sessions(windows, sessions):
+    by_pid = {}
+    for w in windows:
+        if w["pid"]:
+            by_pid.setdefault(w["pid"], []).append(w)
+        w["claude"] = []
+    for s in sessions:
+        for anc in s["ancestors"]:
+            if anc in by_pid:
+                for w in by_pid[anc]:
+                    w["claude"].append(s["cwd"])
+                break
+        else:
+            s["orphan"] = True
+    return [s for s in sessions if s.get("orphan")]
+
+
+def render(ndesk, screens, current, windows, orphans, show_all):
+    cur_txt = "  ".join("%s → desktop %d" % (s, current[s])
+                        for s in screens if s in current)
+    print("%s · now: %s" % (c("1", "%d desktops" % ndesk), cur_txt))
+
+    for d in range(1, ndesk + 1):
+        here = [w for w in windows
+                if str(d) in w["desktops"] or "ALL" in w["desktops"]]
+        if not here and not show_all:
+            continue
+        marks = [s for s in screens if current.get(s) == d]
+        tag = "  " + c("32", "\u2190 current on " + ", ".join(marks)) if marks else ""
+        if not here:
+            print("\n%s%s\n  (empty)" % (c("1", "Desktop %d" % d), tag))
+            continue
+        print("\n%s%s" % (c("1", "Desktop %d" % d), tag))
+        for w in sorted(here, key=lambda x: (x["screen"], x["app"])):
+            extra = []
+            if w["minimized"]:
+                extra.append("minimized")
+            if "ALL" in w["desktops"]:
+                extra.append("all desktops")
+            if w["claude"]:
+                extra.append("claude: " + ", ".join(sorted(set(w["claude"]))))
+            suffix = "  " + c("36", "[%s]" % "; ".join(extra)) if extra else ""
+            print("  %s %-22s %s%s"
+                  % (c("2", "%-10s" % w["screen"]), w["app"][:22],
+                     w["title"], suffix))
+
+    if orphans:
+        print("\n" + c("1", "claude sessions with no window"))
+        for s in orphans:
+            print("  pid %-8d %s" % (s["pid"], s["cwd"]))
+
+
+def main():
+    argv = sys.argv[1:]
+    as_json = "--json" in argv
+    show_all = "--all" in argv
+    timeout = 3.0
+    if "--timeout" in argv:
+        try:
+            timeout = float(argv[argv.index("--timeout") + 1])
+        except (IndexError, ValueError):
+            die("--timeout needs a number of seconds")
+    for arg in argv:
+        if arg in ("-h", "--help"):
+            print(__doc__.strip())
+            return
+        if arg.startswith("-") and arg not in ("--json", "--all", "--timeout"):
+            if not arg.replace(".", "").isdigit():
+                die("unknown option " + arg)
+
+    ndesk, screens, current, windows = parse(probe(timeout))
+    orphans = attach_sessions(windows, claude_sessions())
+
+    if as_json:
+        for w in windows:
+            w.pop("claude_set", None)
+        print(json.dumps({
+            "desktops": ndesk,
+            "screens": screens,
+            "current": current,
+            "windows": windows,
+            "claude_without_window": [
+                {"pid": s["pid"], "cwd": s["cwd"]} for s in orphans],
+        }, indent=2))
+    else:
+        render(ndesk, screens, current, windows, orphans, show_all)
+
+
+if __name__ == "__main__":
+    main()
