@@ -131,10 +131,46 @@ in text: which windows are on which desktop, on which screen.
 ```sh
 ls-ws              # grouped by desktop, colour when stdout is a tty
 ls-ws --desc       # one-line summary beside each Desktop heading
+ls-ws --prompts    # name, status and last prompt of each claude session
 ls-ws --all        # include empty desktops
 ls-ws --json       # machine-readable, includes window pids
 ls-ws --timeout 5  # default 3s
 ```
+
+### `--prompts` — telling claude sessions apart
+
+With a dozen sessions open, the window titles all say `claude` and the only
+thing that distinguishes them is what you last asked:
+
+```
+Desktop 5  — widgets · widgets-api · Chrome · +1 more
+  HDMI-A-1   code    widgets - Visual Studio Code
+     ↳ widgets-f1 · idle · "add a retry around the upload call"
+     ↳ widgets-api-e2 · idle · "push both PRs"
+Desktop 8  — sprockets · Slack
+     ↳ sprockets-b8 · busy · "why does the nightly job time out"
+```
+
+(Examples invented — the real ones are whatever you last typed.)
+
+The link is `~/.claude/sessions/<pid>.json`, which Claude Code writes for
+every live process: `{pid, sessionId, cwd, procStart, name, status, ...}`.
+That is an **exact** pid → session mapping, which the session tracker never
+had — it had to guess from cwd, and gave up when two sessions shared one
+(this is why the old note in `skill/SKILL.md` said same-cwd sessions were
+indistinguishable; that is now obsolete). There is still no session id in the
+environment and no open fd on the transcript, so this file is the only route.
+
+`procStart` is checked against field 22 of `/proc/<pid>/stat` so a recycled
+pid cannot pick up a dead session's file. The session id then names the
+transcript under `~/.claude/projects/<cwd with / replaced by ->/`, and the
+last prompt is the last `user` entry whose content is a plain string —
+a list means a `tool_result`, which is Claude's turn rather than yours.
+Transcripts run to megabytes with single lines of similar size, so it seeks
+backwards over growing slices instead of reading the file.
+
+Costs about 30 ms on top of a plain run, so it is a flag rather than default.
+`status` comes straight from the file: `busy` is the one wanting attention.
 
 ### `--desc`, and what a desktop is "about"
 

@@ -162,12 +162,20 @@ map of running Claude Code sessions:
   Polaris) maps to a Claude Code project dir the same way Claude Code itself
   does: `~/.claude/projects/<cwd with / replaced by ->/`. The newest
   `*.jsonl` there is that session's transcript; its `session_id` is the
-  filename. **Known limitation:** if two processes share the exact same cwd
-  there is no signal (checked: no session-id env var in `/proc/pid/environ`,
-  no open fd to the transcript) to tell which transcript belongs to which
-  pid — `group_sessions_by_cwd()` collapses them into one pad rather than
-  showing duplicate/possibly-wrong pads. A press on that pad tries all of
-  the group's pids for window-matching and unions them for --resume.
+  filename. **This cwd guess is no longer necessary** — see below.
+  `group_sessions_by_cwd()` still collapses same-cwd processes into one pad,
+  and a press on that pad tries all of the group's pids for window-matching
+  and unions them for --resume.
+- **Exact pid → session (found 2026-09-18, supersedes the old limitation).**
+  Claude Code writes `~/.claude/sessions/<pid>.json` for every live process:
+  `{pid, sessionId, cwd, procStart, name, status, version, ...}`. That is an
+  exact mapping, so same-cwd sessions no longer have to be collapsed — the
+  old note here said there was no signal for them (no session-id env var, no
+  open fd on the transcript, both still true) and that is now obsolete.
+  Guard against pid reuse by checking `procStart` against field 22 of
+  `/proc/<pid>/stat`; they match exactly. `status` is `idle`/`busy`, and
+  `name` is a derived label like `leaddbs-b8`. `tools/ls-ws --prompts` uses
+  all of this; the daemon has not been migrated to it yet.
 - Color = sentiment of the transcript's last message: green
   (`COLOR_SESSION_POS`, 21) if the last tool_result had no error, red
   (`COLOR_SESSION_NEG`, 5) if it did, dim white (`COLOR_SESSION_UNKNOWN`, 1)

@@ -9,10 +9,11 @@ them by walking /proc ancestry.
 With --banner it instead throws a short summary of the current desktop onto
 the top of the screen for 30 seconds.
 
-Usage:  ls-ws [--desc] [--all] [--json] [--timeout SECS]
+Usage:  ls-ws [--desc] [--prompts] [--all] [--json] [--timeout SECS]
         ls-ws --banner [TEXT] [--banner-secs N] [--screen NAME]
 
-  --desc  put a one-line summary of each desktop next to its heading
+  --desc     put a one-line summary of each desktop next to its heading
+  --prompts  name, status and last prompt of every live claude session
 """
 import json
 import os
@@ -226,6 +227,115 @@ def parse(lines):
     return ndesk, screens, current, active_screen, windows
 
 
+CLAUDE_DIR = os.path.expanduser("~/.claude")
+# Claude Code writes one of these per live process, which is the only exact
+# pid -> session link: there is no session id in the environment and the
+# process holds no fd on its own transcript.
+SESSIONS_DIR = os.path.join(CLAUDE_DIR, "sessions")
+PROJECTS_DIR = os.path.join(CLAUDE_DIR, "projects")
+PROMPT_WIDTH = 96
+
+# User entries that are machinery rather than something that was typed.
+NOT_A_PROMPT = ("<command-name>", "<local-command", "<bash-input>",
+                "<bash-stdout>", "<system-reminder>", "<user-prompt-submit-hook>",
+                "<ide_", "Caveat:")
+
+
+def proc_start(pid):
+    """Field 22 of /proc/<pid>/stat, which sessions/<pid>.json records too."""
+    try:
+        with open("/proc/%d/stat" % pid) as fh:
+            data = fh.read()
+        return data[data.rindex(")") + 2:].split()[19]
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def session_meta(pid):
+    """Read sessions/<pid>.json, rejecting a file left by a reused pid."""
+    try:
+        with open(os.path.join(SESSIONS_DIR, "%d.json" % pid)) as fh:
+            meta = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not meta.get("sessionId"):
+        return None
+    recorded = meta.get("procStart")
+    if recorded and str(recorded) != (proc_start(pid) or ""):
+        return None
+    return meta
+
+
+def prompt_of(entry):
+    """The typed text of a transcript entry, or None if it is not a prompt."""
+    if entry.get("type") != "user" or entry.get("isMeta"):
+        return None
+    content = (entry.get("message") or {}).get("content")
+    if isinstance(content, list):
+        # A list holding a tool_result is Claude's own turn, not the user's.
+        if any(b.get("type") != "text" for b in content if isinstance(b, dict)):
+            return None
+        content = " ".join(b.get("text", "") for b in content
+                           if isinstance(b, dict))
+    if not isinstance(content, str):
+        return None
+    text = " ".join(content.split())
+    if not text or text.startswith(NOT_A_PROMPT):
+        return None
+    return text
+
+
+def last_prompt(path):
+    """The last thing typed into a session, read from the tail of its log.
+
+    Transcripts run to megabytes and a single tool_result line can be huge,
+    so this walks backwards over growing slices rather than reading the lot.
+    """
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return None
+    for window in (256 * 1024, 4 * 1024 * 1024, size + 1):
+        start = max(0, size - window)
+        try:
+            with open(path, "rb") as fh:
+                fh.seek(start)
+                data = fh.read()
+        except OSError:
+            return None
+        lines = data.split(b"\n")
+        if start:
+            del lines[0]  # partial line
+        for raw in reversed(lines):
+            if b'"type":"user"' not in raw:
+                continue
+            try:
+                entry = json.loads(raw.decode("utf8", "replace"))
+            except ValueError:
+                continue
+            text = prompt_of(entry)
+            if text:
+                return text
+        if start == 0:
+            break
+    return None
+
+
+def describe_session(pid):
+    """Name, status and last prompt for a live claude process."""
+    meta = session_meta(pid)
+    if not meta:
+        return {}
+    path = os.path.join(PROJECTS_DIR, meta["cwd"].replace("/", "-"),
+                        meta["sessionId"] + ".jsonl")
+    return {
+        "session_id": meta["sessionId"],
+        "name": meta.get("name"),
+        "status": meta.get("status"),
+        "prompt": last_prompt(path),
+    }
+
+
 def ancestors(pid, limit=12):
     """Walk up /proc parent links, yielding each ancestor pid."""
     out = []
@@ -245,7 +355,7 @@ def ancestors(pid, limit=12):
     return out
 
 
-def claude_sessions():
+def claude_sessions(with_prompts=False):
     """Map each running `claude` process to its cwd and ancestor pids."""
     home = os.path.expanduser("~")
     sessions = []
@@ -268,7 +378,10 @@ def claude_sessions():
             if short.startswith(prefix + "/"):
                 short = "~" + short[len(prefix):]
                 break
-        sessions.append({"pid": pid, "cwd": short, "ancestors": set(ancestors(pid))})
+        entry = {"pid": pid, "cwd": short, "ancestors": set(ancestors(pid))}
+        if with_prompts:
+            entry.update(describe_session(pid))
+        sessions.append(entry)
     return sessions
 
 
@@ -278,11 +391,13 @@ def attach_sessions(windows, sessions):
         if w["pid"]:
             by_pid.setdefault(w["pid"], []).append(w)
         w["claude"] = []
+        w["sessions"] = []
     for s in sessions:
         for anc in s["ancestors"]:
             if anc in by_pid:
                 for w in by_pid[anc]:
                     w["claude"].append(s["cwd"])
+                    w["sessions"].append(s)
                 break
         else:
             s["orphan"] = True
@@ -318,8 +433,11 @@ def subject(window):
         if SSH_RE.match(title):
             return ["ssh"]
         m = KONSOLE_RE.match(title)
-        if m and m.group("cwd").lower() not in GENERIC_DIRS:
-            return [m.group("cwd")]
+        if m:
+            cwd = m.group("cwd")
+            # Konsole shows "-" when it cannot read the cwd, e.g. under sudo.
+            if cwd.lower() not in GENERIC_DIRS and any(ch.isalnum() for ch in cwd):
+                return [cwd]
         return None
 
     if app in BROWSERS:
@@ -408,7 +526,28 @@ def show_banner(text, seconds, screen, timeout):
     return False
 
 
-def render(ndesk, screens, current, windows, orphans, show_all, show_desc):
+def public(session):
+    return {k: v for k, v in session.items() if k != "ancestors"}
+
+
+def session_line(s, indent):
+    """One line identifying a claude session by what was last asked of it."""
+    bits = [c("1", s["name"])] if s.get("name") else []
+    status = s.get("status")
+    if status:
+        bits.append(c("33" if status != "idle" else "2", status))
+    prompt = s.get("prompt")
+    if prompt:
+        if len(prompt) > PROMPT_WIDTH:
+            prompt = prompt[:PROMPT_WIDTH - 1] + "…"
+        bits.append(c("36", '"%s"' % prompt))
+    else:
+        bits.append(c("2", "no prompt yet"))
+    return "%s%s %s" % (" " * indent, c("2", "↳"), " · ".join(bits))
+
+
+def render(ndesk, screens, current, windows, orphans, show_all, show_desc,
+           show_prompts):
     cur_txt = "  ".join("%s → desktop %d" % (s, current[s])
                         for s in screens if s in current)
     print("%s · now: %s" % (c("1", "%d desktops" % ndesk), cur_txt))
@@ -440,19 +579,24 @@ def render(ndesk, screens, current, windows, orphans, show_all, show_desc):
             print("  %s %-22s %s%s"
                   % (c("2", "%-10s" % w["screen"]), w["app"][:22],
                      w["title"], suffix))
+            if show_prompts:
+                for s in w["sessions"]:
+                    print(session_line(s, 5))
 
     if orphans:
         print("\n" + c("1", "claude sessions with no window"))
         for s in orphans:
             print("  pid %-8d %s" % (s["pid"], s["cwd"]))
+            if show_prompts:
+                print(session_line(s, 5))
 
 
 VALUE_FLAGS = ("--timeout", "--banner-secs", "--screen")
 
 
 def parse_args(argv):
-    opts = {"json": False, "all": False, "desc": False, "timeout": 3.0,
-            "banner": False, "banner_text": None,
+    opts = {"json": False, "all": False, "desc": False, "prompts": False,
+            "timeout": 3.0, "banner": False, "banner_text": None,
             "banner_secs": BANNER_SECS, "screen": None}
     i = 0
     while i < len(argv):
@@ -466,6 +610,8 @@ def parse_args(argv):
             opts["all"] = True
         elif arg == "--desc":
             opts["desc"] = True
+        elif arg == "--prompts":
+            opts["prompts"] = True
         elif arg == "--banner":
             opts["banner"] = True
             # --banner takes optional text: the next argument, unless that is
@@ -500,7 +646,7 @@ def main():
 
     ndesk, screens, current, active_screen, windows = parse(
         kwin_run(PROBE_JS, opts["timeout"]))
-    orphans = attach_sessions(windows, claude_sessions())
+    orphans = attach_sessions(windows, claude_sessions(opts["prompts"]))
 
     if opts["banner"]:
         screen = opts["screen"] or active_screen or (screens[0] if screens else "")
@@ -519,9 +665,12 @@ def main():
             "active_screen": active_screen,
             "current": current,
             "windows": windows,
-            "claude_without_window": [
-                {"pid": s["pid"], "cwd": s["cwd"]} for s in orphans],
+            "claude_without_window": [public(s) for s in orphans],
         }
+        # "ancestors" is a set used only for window matching; drop it so the
+        # payload stays JSON-serialisable.
+        for w in payload["windows"]:
+            w["sessions"] = [public(s) for s in w["sessions"]]
         if opts["desc"]:
             payload["descriptions"] = {
                 str(d): summarise(d, None, windows, prefix=False)
@@ -529,7 +678,7 @@ def main():
         print(json.dumps(payload, indent=2))
     else:
         render(ndesk, screens, current, windows, orphans,
-               opts["all"], opts["desc"])
+               opts["all"], opts["desc"], opts["prompts"])
 
 
 if __name__ == "__main__":
