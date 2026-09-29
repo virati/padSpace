@@ -54,7 +54,7 @@ own top row are both real conventions people use) or indirect state-diffing
 after several rounds of counting confusion and failed diagnostic scripts —
 ask it first next time.
 
-Project: `~/projects/padSpace` (README, reference copies, install.sh, session transcript).
+Project: `~/Projects/padSpace` (README, reference copies, install.sh, session transcript).
 Live daemon: `~/.local/bin/launchpad-workspaces` · unit: `~/.config/systemd/user/launchpad-workspaces.service` (enabled).
 
 Plasma 6.7 per-screen virtual desktops (kwinrc `[Windows]
@@ -127,6 +127,34 @@ DROPS reports older than its last press/move (`last_action_ms`) so a late
 pre-press report can't drag the LEDs backwards — don't remove this guard,
 removing it reintroduces visible LED flip-backs. The one-shot reporter poll
 (5 s) is only a safety net.
+
+**Agent flash (built 2026-09-29, branch `agent-done-flash`):** a workspace
+pad flashes when a local Claude Code session whose window is on that desktop
+stops — green `COLOR_AGENT_DONE` (21) when its turn finished, red
+`COLOR_AGENT_INPUT` (5) when it is blocked on you. Flash = ch1 the pad's own
+color (0 if it equals the alert) + ch2 the alert color; red beats green on a
+shared pad and both beat attention flashing. Green clears once the session's
+window has had focus (`acked`, keyed by the event ts); red clears when the
+session moves on. Sources:
+- `~/.local/bin/padspace-agent-hook` (repo `tools/`), a Claude Code hook for
+  Stop/StopFailure/Notification/UserPromptSubmit/PostToolUse, registered in
+  `~/.claude/settings.json` by `tools/install-agent-hooks.py` (`--remove`
+  undoes it). Writes `~/.local/state/padspace/agents/<session_id>.json` with
+  kind done/input/clear. `idle_prompt` notifications are ignored on purpose.
+- `~/.claude/sessions/<pid>.json` for session → pid, `status`, and `name`.
+  Checked in the 2.1.285 binary: `status` is busy/idle/shell/waiting, and
+  "waiting" (with `waitingFor`) is set for elicitation and many dialogs, but
+  NOT for the tool-permission prompt — that is why the hook exists.
+- Reporter tokens `P=pid:screen:d.d;...` (every normal window) and `A=pid`
+  (focused window); the events script now also hooks
+  `workspace.windowActivated`. Window match = the window pid is an ancestor
+  of the claude pid (`process_ancestors`).
+Journal lines `agent <name>: done|needs input|cleared` and `agent pads: [...]`
+show what the daemon decided. Tested by feeding fake hook events through the
+live daemon; real hooks firing and the LED look are for Vin to check by hand.
+Also fixed with it: `light()` built `flash_msg` but never sent it (since
+`bac7de2`), so attention (`demandsAttention`) pads showed the dim color
+without flashing. They now really flash.
 
 **Numpad mode:** Keys button (row 1 col 7, cc97, `KEYS_CC`) → bottom-left
 3×4 pads (`NUMPAD`: 41-43=789, 31-33=456, 21-23=123, 11-13 all = wide ZERO)
@@ -241,7 +269,7 @@ amber 9 when on). Mutually exclusive with Keys/Session/User — enabling any
 of the four disables the others, and toggling off returns to the shared dark
 default (workspace grid only), not to any other mode. WAVs live in
 `~/.local/share/padspace/drumkit/`, generated
-by `~/projects/padSpace/tools/make-drumkit.py` (pure stdlib synthesis; replace
+by `~/Projects/padSpace/tools/make-drumkit.py` (pure stdlib synthesis; replace
 any WAV with a same-named file to upgrade a pad, then re-toggle drum mode).
 Low latency: samples preload into PipeWire-Pulse via `pactl upload-sample
 <file> padspace-<name>` on mode entry; hits trigger `pactl play-sample`
@@ -250,7 +278,7 @@ kick-sub, kick-hard, snare, clap, hat-closed, hat-open, crash; second row:
 sub-drop, tom-low, tom-high, shaker, pluck, snap, ride, reverse-cymbal.
 cc95-98 are all reserved in bindings.conf (all four are mode toggles now).
 To find a button's ID: press it, read the "unbound pad note N / control ccN"
-line in the daemon journal. Starter config: `~/projects/padSpace/config/bindings.conf`.
+line in the daemon journal. Starter config: `~/Projects/padSpace/config/bindings.conf`.
 
 ## Editing the mapping
 
@@ -262,7 +290,7 @@ App-marker colors live in `MARKERS` there too. To find any button's ID, have the
 user press it and read `journalctl --user -u launchpad-workspaces -f` — the
 daemon logs all unmapped presses (grid pads as "Note on", round buttons as CC).
 Round-button LEDs use `B0 <cc> <color>`; pad LEDs use `90 <note> <color>`.
-After editing: copy to `~/projects/padSpace/bin/` too, then restart (below).
+After editing: copy to `~/Projects/padSpace/bin/` too, then restart (below).
 
 ## Restart / stop / start (from claudebox container)
 
@@ -272,7 +300,7 @@ running"). Use the D-Bus API (status/enable/daemon-reload work normally):
     busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
       org.freedesktop.systemd1.Manager RestartUnit ss launchpad-workspaces.service replace
 
-(also StartUnit / StopUnit, same signature). `~/projects/padSpace/install.sh`
+(also StartUnit / StopUnit, same signature). `~/Projects/padSpace/install.sh`
 does install + enable + restart in one shot.
 
 ## Device protocol (Launchpad Mini MK3, verified)

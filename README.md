@@ -32,6 +32,32 @@ remains as a safety net. Per-screen switching uses KWin scripting
 (`setCurrentDesktopForScreen(desktop, screen)` — desktop argument first); there
 is no plain D-Bus API for it.
 
+**A workspace pad flashes when a Claude Code session on it stops.** It flashes
+**green** when the session finished its turn, and **red** when it is blocked on
+you: a permission prompt, a question or MCP dialog, or a turn that failed.
+The flash alternates with the pad's normal color, so the current desktop still
+reads white. Green goes away once you focus that session's window; red goes
+away when the session moves on (you answer, a tool runs, or you send a
+prompt). This works in every mode, since the workspace grid is always live.
+Only sessions on this machine count; Polaris sessions have no local window.
+
+How it knows:
+
+- `tools/padspace-agent-hook` is a Claude Code hook, registered in
+  `~/.claude/settings.json` by `tools/install-agent-hooks.py` (install.sh runs
+  it; `--remove` takes it out). `Stop` → done, `Notification`
+  (`permission_prompt`, elicitation dialogs) and `StopFailure` → needs input,
+  `UserPromptSubmit`/`PostToolUse` → clear. It writes
+  `~/.local/state/padspace/agents/<session_id>.json`.
+- Hooks are needed because `~/.claude/sessions/<pid>.json`, which Claude Code
+  keeps for every live process, says `status: "waiting"` for some dialogs but
+  stays `busy` during a tool-permission prompt. The daemon still reads it,
+  to map session → pid (checked against `procStart` so a reused pid cannot
+  match), to know a session is idle, and as a second source of red.
+- The reporter now also lists each window's pid (`P=`) and the focused window
+  (`A=`). A session belongs to the window whose pid is one of its ancestors —
+  the Konsole it runs in — and lights every desktop that window is on.
+
 **Every other pad and round button can run an arbitrary shell command** via
 `~/.config/padspace/bindings.conf` (starter copy in `config/`):
 

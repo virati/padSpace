@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Claude Code hook -> padSpace agent state.
+
+Registered in ~/.claude/settings.json for Stop, StopFailure, Notification,
+UserPromptSubmit and PostToolUse (install.sh merges the entries). Reads the
+hook's JSON from stdin and records what the session last did in
+~/.local/state/padspace/agents/<session_id>.json, which the daemon polls to
+flash the workspace pad holding that session's window:
+
+  done   turn finished (Stop)                         -> green flash
+  input  blocked on you: a permission prompt, a       -> red flash
+         question or MCP dialog, or the turn failed
+  clear  working again (prompt sent, tool ran)        -> no flash
+
+Why hooks and not just ~/.claude/sessions/<pid>.json: that file does say
+status "waiting" for some dialogs, but a tool-permission prompt leaves it
+at "busy", and that is the most common way a session waits on you.
+
+Must be fast and must never fail the hook: any error exits 0 silently.
+"""
+
+import json
+import os
+import sys
+import time
+
+STATE_DIR = os.path.expanduser("~/.local/state/padspace/agents")
+INPUT_NOTIFICATIONS = {"permission_prompt", "elicitation_dialog",
+                       "elicitation_url_dialog", "agent_needs_input"}
+
+
+def classify(ev):
+    name = ev.get("hook_event_name")
+    if name == "Stop":
+        return "done"
+    if name == "StopFailure":
+        return "input"
+    if name == "Notification":
+        # idle_prompt is a "still waiting" reminder after a finished turn;
+        # it must not turn a green pad red
+        return "input" if ev.get("notification_type") in INPUT_NOTIFICATIONS else None
+    if name in ("UserPromptSubmit", "PostToolUse", "PostToolUseFailure"):
+        return "clear"
+    return None
+
+
+def main():
+    ev = json.load(sys.stdin)
+    sid = ev.get("session_id")
+    kind = classify(ev)
+    if not sid or kind is None or "/" in sid:
+        return
+    path = os.path.join(STATE_DIR, sid + ".json")
+    if kind == "clear":
+        # PostToolUse fires on every tool call; only write when there is
+        # something to clear
+        try:
+            with open(path) as f:
+                if json.load(f).get("kind") == "clear":
+                    return
+        except (OSError, ValueError):
+            return
+    os.makedirs(STATE_DIR, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"kind": kind, "event": ev.get("hook_event_name"),
+                   "detail": ev.get("notification_type"),
+                   "ts": int(time.time() * 1000)}, f)
+    os.replace(tmp, path)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        pass
+    sys.exit(0)

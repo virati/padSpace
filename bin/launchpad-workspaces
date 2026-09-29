@@ -176,6 +176,17 @@ POLARIS_USER = "vineet"
 POLARIS_POLL_SECS = 6.0
 POLARIS_SSH_TIMEOUT = 6
 CLAUDE_PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
+# Agent flash: a workspace pad flashes when a local Claude Code session whose
+# window is on that desktop finishes its turn (green) or is blocked on you
+# (red: permission prompt, question, failed turn). Works in every mode — the
+# workspace grid is always live. Events come from tools/padspace-agent-hook
+# (Claude Code hooks) and ~/.claude/sessions/<pid>.json maps session -> pid.
+AGENT_STATE_DIR = os.path.expanduser("~/.local/state/padspace/agents")
+CLAUDE_SESSIONS_DIR = os.path.expanduser("~/.claude/sessions")
+COLOR_AGENT_DONE = 21    # green
+COLOR_AGENT_INPUT = 5    # red
+AGENT_POLL_SECS = 1.0
+AGENT_PRUNE_SECS = 600   # drop hook state of sessions gone this long
 
 SYSEX_PROGRAMMER = "F0 00 20 29 02 0D 0E 01 F7"
 SYSEX_LIVE = "F0 00 20 29 02 0D 0E 00 F7"
@@ -197,6 +208,7 @@ const rules = [%(rules)s];
 let hits = rules.map(function() { return [[], []]; });
 let occ = [[], []];
 let urg = [[], []];
+let wins = [];
 const excludeRe = %(exclude_re)s;
 for (const w of workspace.windowList()) {
   if (!w.normalWindow) continue;
@@ -207,6 +219,8 @@ for (const w of workspace.windowList()) {
   }
   if (sidx < 0) continue;
   const desks = w.onAllDesktops ? workspace.desktops : w.desktops;
+  if (w.pid > 0)
+    wins.push(w.pid + ":" + sidx + ":" + desks.map(function(d) { return d.x11DesktopNumber; }).join("."));
   for (const d of desks) {
     if (occ[sidx].indexOf(d.x11DesktopNumber) < 0) occ[sidx].push(d.x11DesktopNumber);
     if (w.demandsAttention && urg[sidx].indexOf(d.x11DesktopNumber) < 0)
@@ -226,6 +240,8 @@ parts.push("W0=" + occ[0].join(","));
 parts.push("W1=" + occ[1].join(","));
 parts.push("U0=" + urg[0].join(","));
 parts.push("U1=" + urg[1].join(","));
+parts.push("P=" + wins.join(";"));
+parts.push("A=" + (workspace.activeWindow ? workspace.activeWindow.pid : 0));
 for (let i = 0; i < rules.length; i++) {
   parts.push("M" + i + "S0=" + hits[i][0].join(","));
   parts.push("M" + i + "S1=" + hits[i][1].join(","));
@@ -246,7 +262,8 @@ REPORTER = _REPORT_FN + "\npadspaceReport();\n"
 
 # Persistent event-driven reporter: emits a fresh state line the moment a
 # desktop switches, a window appears/disappears, moves, changes screen, or
-# retitles (caption drives the Notion marker). This is what makes the LEDs
+# retitles (caption drives the Notion marker), or focus moves (focusing a
+# finished agent's window clears its green flash). This is what makes the LEDs
 # feel instant; the poll is only a safety net.
 EVENTS_SCRIPT = _REPORT_FN + """
 function padspaceHook(w) {
@@ -256,6 +273,7 @@ function padspaceHook(w) {
   try { w.demandsAttentionChanged.connect(padspaceReport); } catch (e) {}
 }
 try { workspace.currentDesktopChanged.connect(padspaceReport); } catch (e) {}
+try { workspace.windowActivated.connect(padspaceReport); } catch (e) {}
 try {
   workspace.windowAdded.connect(function(w) { padspaceHook(w); padspaceReport(); });
 } catch (e) {}
@@ -505,6 +523,99 @@ def process_ancestors(pid):
             break
         cur = ppid
     return ancestors
+
+
+def live_claude_sessions():
+    """-> {session_id: (pid, status, name)} for interactive Claude Code
+    sessions on this machine, from ~/.claude/sessions/<pid>.json (written by
+    Claude Code for every live process). procStart must match field 22 of
+    /proc/<pid>/stat, so a recycled pid cannot inherit a dead session."""
+    out = {}
+    try:
+        names = os.listdir(CLAUDE_SESSIONS_DIR)
+    except OSError:
+        return out
+    for n in names:
+        if not n.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(CLAUDE_SESSIONS_DIR, n)) as f:
+                d = json.load(f)
+            pid = int(d["pid"])
+            with open(f"/proc/{pid}/stat") as f:
+                start = f.read().rsplit(")", 1)[-1].split()[19]
+        except (OSError, ValueError, KeyError, IndexError, TypeError):
+            continue
+        if str(d.get("procStart")) != start or d.get("kind", "interactive") != "interactive":
+            continue
+        out[d.get("sessionId")] = (pid, d.get("status"), d.get("name") or str(pid))
+    return out
+
+
+def agent_events(live):
+    """-> {session_id: (kind, ts)} from the hook's state files, for live
+    sessions. Files of sessions that have been gone a while are removed."""
+    events = {}
+    try:
+        names = os.listdir(AGENT_STATE_DIR)
+    except OSError:
+        return events
+    now = time.time()
+    for n in names:
+        if not n.endswith(".json"):
+            continue
+        path = os.path.join(AGENT_STATE_DIR, n)
+        sid = n[:-5]
+        if sid not in live:
+            try:
+                if now - os.path.getmtime(path) > AGENT_PRUNE_SECS:
+                    os.remove(path)
+            except OSError:
+                pass
+            continue
+        try:
+            with open(path) as f:
+                d = json.load(f)
+            events[sid] = (d.get("kind"), d.get("ts", 0))
+        except (OSError, ValueError):
+            continue
+    return events
+
+
+def agent_alerts(live, events):
+    """-> [(session_id, pid, name, color, ts)] for sessions to flash.
+    Red if the session is blocked on you — the hook saw a permission prompt,
+    dialog or failed turn, or Claude Code itself reports status "waiting".
+    Green if the last turn finished and the session is idle."""
+    alerts = []
+    for sid, (pid, status, name) in live.items():
+        kind, ts = events.get(sid, (None, 0))
+        if status == "waiting" or kind == "input":
+            alerts.append((sid, pid, name, COLOR_AGENT_INPUT, ts))
+        elif kind == "done" and status in ("idle", "shell"):
+            alerts.append((sid, pid, name, COLOR_AGENT_DONE, ts))
+    return alerts
+
+
+def agent_pads(alerts, windows, active_pid, acked):
+    """-> {(screen_idx, desktop): color} for the workspace grid. A session
+    maps to every desktop of each window that is one of its ancestors (the
+    terminal it runs in). A green alert is acknowledged, and stays off, once
+    its window has had focus; red stays until the session moves on."""
+    pads = {}
+    for sid, pid, _, color, ts in alerts:
+        if color == COLOR_AGENT_DONE and acked.get(sid) == ts:
+            continue
+        anc = process_ancestors(pid)
+        if color == COLOR_AGENT_DONE and active_pid in anc:
+            acked[sid] = ts
+            continue
+        for wpid, scr, desks in windows:
+            if wpid in anc:
+                for d in desks:
+                    if pads.get((scr, d)) != COLOR_AGENT_INPUT:
+                        pads[(scr, d)] = color
+    return pads
 
 
 # Remote counterpart of find_transcript/transcript_sentiment/local_claude_sessions,
@@ -799,11 +910,13 @@ def dim_variant(color):
 def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, urg0, urg1,
           note_binds, cc_binds,
           drums_on=False, keys_on=False, user_ctrl=None, session_on=False,
-          session_map=None):
+          session_map=None, agent=None):
     msg = []
     flash_msg = []
-    for grid, cur, marked, occ, urg in ((GRID_S0, cur0, marked0, occ0, urg0),
-                                        (GRID_S1, cur1, marked1, occ1, urg1)):
+    agent = agent or {}
+    for scr, (grid, cur, marked, occ, urg) in enumerate(
+            ((GRID_S0, cur0, marked0, occ0, urg0),
+             (GRID_S1, cur1, marked1, occ1, urg1))):
         for note, desk in grid.items():
             if cur is None:          # screen not connected: grid dark
                 color = 0x00
@@ -815,7 +928,15 @@ def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, urg0, urg1,
                 color = COLOR_IDLE
             else:                    # empty workspace: unlit
                 color = 0x00
-            if color and desk in urg:
+            alert = agent.get((scr, desk)) if cur is not None else None
+            if alert:
+                # a claude session here finished (green) or needs you (red):
+                # flash between the pad's own color and the alert, so the
+                # current/occupied state still reads through
+                base = color if color != alert else 0x00
+                msg += ["90", f"{note:02X}", f"{base:02X}"]
+                flash_msg += ["91", f"{note:02X}", f"{alert:02X}"]
+            elif color and desk in urg:
                 # window demands attention: hardware-flash high/low of the
                 # pad's color (ch1 static = dim, ch2 flash = bright)
                 msg += ["90", f"{note:02X}", f"{dim_variant(color):02X}"]
@@ -851,7 +972,8 @@ def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, urg0, urg1,
     msg += ["B0", f"{SESSION_CC:02X}", f"{session_color:02X}"]
     for cc in ARROW_CCS:
         msg += ["B0", f"{cc:02X}", f"{COLOR_ARROW:02X}"]
-    send_hex(ports, " ".join(msg))
+    # flash messages go after the static ones: a ch1 note-on cancels a flash
+    send_hex(ports, " ".join(msg + flash_msg))
 
 
 def parse_state(line):
@@ -898,6 +1020,32 @@ def parse_state(line):
                    frozenset(urgent[0]), frozenset(urgent[1])))
 
 
+def parse_windows(line):
+    """-> ((pid, screen_idx, frozenset(desktops)), ...), active window pid
+    from a state line's P= and A= tokens, or None if it has neither."""
+    m = STATE_RE.search(line)
+    if not m:
+        return None
+    windows, active, seen = [], 0, False
+    for tok in m.group(1).split():
+        if tok.startswith("P="):
+            seen = True
+            for ent in filter(None, tok[2:].split(";")):
+                try:
+                    pid, scr, desks = ent.split(":")
+                    windows.append((int(pid), int(scr),
+                                    frozenset(int(d) for d in desks.split(".") if d)))
+                except ValueError:
+                    continue
+        elif tok.startswith("A="):
+            seen = True
+            try:
+                active = int(tok[2:])
+            except ValueError:
+                pass
+    return (tuple(windows), active) if seen else None
+
+
 def run_session(ports):
     send_hex(ports, SYSEX_PROGRAMMER)
     time.sleep(0.2)
@@ -918,13 +1066,19 @@ def run_session(ports):
     grabbed = None     # internalId of the window active at last workspace press
     last_action_ms = 0.0   # wall clock of our latest state-changing action
     flashes = []  # (is_cc, id, restore_color, deadline)
+    windows, active_pid = (), 0   # from the reporter's P=/A= tokens
+    alerts = []        # agent_alerts(), refreshed every AGENT_POLL_SECS
+    acked = {}         # session_id -> ts of the green alert whose window got focus
+    agent = {}         # (screen_idx, desktop) -> flash color
+    agent_log = {}     # session_id -> color last logged
+    last_agent_poll = 0.0
 
     seq = subprocess.Popen(
         ["aseqdump", "-p", f"{SEQ_CLIENT}:0,{SEQ_CLIENT}:1"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     jrn = journal_follower()
     log(f"connected on {ports}, {len(note_binds) + len(cc_binds)} command binding(s)")
-    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map)
+    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
     run_kwin_script(os.path.join(SCRIPT_DIR, "padspace-events.js"),
                     EVENTS_SCRIPT, "padspace-events")  # persistent, event-driven
 
@@ -958,7 +1112,7 @@ def run_session(ports):
                             if s[scr] is not None:
                                 s[scr] = desk
                                 state = tuple(s)
-                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
                         elif keys_on and note in NUMPAD:
                             press_digit(NUMPAD[note])
                         elif drums_on and note in DRUM_PADS:
@@ -1008,7 +1162,7 @@ def run_session(ports):
                                 upload_drumkit()
                             log(f"drum kit {'ON' if drums_on else 'off'}")
                             clear_all(ports)
-                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
                         elif cc == KEYS_CC:
                             keys_on = not keys_on
                             if keys_on:
@@ -1019,7 +1173,7 @@ def run_session(ports):
                                 session_map = {}
                             log(f"numpad {'ON' if keys_on else 'off'}")
                             clear_all(ports)
-                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
                         elif cc == USER_CC:
                             user_ctrl = load_ctrl() if user_ctrl is None else None
                             if user_ctrl is not None:
@@ -1031,7 +1185,7 @@ def run_session(ports):
                             else:
                                 log("skill launcher off")
                             clear_all(ports)
-                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
                         elif cc == SESSION_CC:
                             session_on = not session_on
                             if session_on:
@@ -1050,7 +1204,7 @@ def run_session(ports):
                             log(f"session tracker {'ON' if session_on else 'off'}: "
                                 f"{len(session_map)} session(s)")
                             clear_all(ports)
-                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
                         elif cc in cc_binds:
                             color, cmd = cc_binds[cc]
                             flash(True, cc, color)
@@ -1066,6 +1220,13 @@ def run_session(ports):
                 gm = GRAB_RE.search(line)
                 if gm:
                     grabbed = gm.group(1)
+                wp = parse_windows(line)
+                if wp:
+                    windows, active_pid = wp
+                    new_agent = agent_pads(alerts, windows, active_pid, acked)
+                    if new_agent != agent:
+                        agent = new_agent
+                        light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
                 parsed = parse_state(line)
                 if parsed:
                     t_ms, data = parsed
@@ -1075,17 +1236,32 @@ def run_session(ports):
                         pass
                     elif data != state:
                         state = data
-                        light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map)
+                        light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
             now = time.monotonic()
             if keys_on and now - last_osc >= OSC_TICK_SECS:
                 last_osc = now
                 numpad_rgb(ports, now)
+            if now - last_agent_poll >= AGENT_POLL_SECS:
+                last_agent_poll = now
+                live = live_claude_sessions()
+                alerts = agent_alerts(live, agent_events(live))
+                cur_log = {a[0]: a[3] for a in alerts}
+                for sid, (_, _, name) in live.items():
+                    if cur_log.get(sid) != agent_log.get(sid):
+                        what = {COLOR_AGENT_DONE: "done", COLOR_AGENT_INPUT: "needs input"}.get(cur_log.get(sid), "cleared")
+                        log(f"agent {name}: {what}")
+                agent_log = cur_log
+                new_agent = agent_pads(alerts, windows, active_pid, acked)
+                if new_agent != agent:
+                    agent = new_agent
+                    log(f"agent pads: {sorted(agent.items())}")
+                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
             if session_on and now - last_session_poll >= SESSION_POLL_SECS:
                 last_session_poll = now
                 new_map = build_session_map(local_claude_sessions(), polaris_sessions_snapshot())
                 if new_map != session_map:
                     session_map = new_map
-                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map)
+                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
             for f in flashes[:]:
                 is_cc, ident, color, deadline = f
                 if now >= deadline:
@@ -1104,7 +1280,7 @@ def run_session(ports):
                     conf_mtime = bindings_mtime()
                     note_binds, cc_binds = load_bindings()
                     clear_all(ports)
-                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map)
+                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
                     log(f"bindings reloaded: {len(note_binds) + len(cc_binds)} command binding(s)")
     finally:
         _polaris_stop.set()
