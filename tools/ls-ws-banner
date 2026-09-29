@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Draw a short-lived banner strip. Positioned by the caller, not by itself.
+
+Wayland gives a client no way to place its own window, so this only draws;
+`ls-ws --banner` puts it at the top of a screen with a KWin script, the same
+way the daemon moves windows between outputs.
+
+Usage:  ls-ws-banner TEXT SECONDS
+"""
+import sys
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+
+# KWin matches the window by this resourceClass to place it, and ls-ws hides
+# it from its own listing by the same name.
+APP_ID = "ls-ws-banner"
+
+CSS = b"""
+window { background-color: transparent; }
+#banner {
+    background-color: rgba(28, 30, 36, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 10px;
+}
+#banner label {
+    color: #f2f4f8;
+    font-size: 15pt;
+    font-weight: 500;
+    padding: 12px 20px;
+}
+"""
+
+
+def main():
+    if len(sys.argv) < 3:
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    text = sys.argv[1]
+    try:
+        seconds = float(sys.argv[2])
+    except ValueError:
+        print("ls-ws-banner: SECONDS must be a number", file=sys.stderr)
+        return 2
+
+    GLib.set_prgname(APP_ID)
+    GLib.set_application_name(APP_ID)
+
+    win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+    win.set_title(APP_ID)
+    win.set_decorated(False)
+    win.set_resizable(False)
+    win.set_accept_focus(False)
+    win.set_focus_on_map(False)
+    win.set_skip_taskbar_hint(True)
+    win.set_skip_pager_hint(True)
+    win.set_keep_above(True)
+    win.set_type_hint(Gdk.WindowTypeHint.NOTIFICATION)
+    win.set_app_paintable(True)
+
+    screen = win.get_screen()
+    visual = screen.get_rgba_visual()
+    if visual is not None:
+        win.set_visual(visual)
+
+    frame = Gtk.EventBox()
+    frame.set_name("banner")
+    label = Gtk.Label(label=text)
+    label.set_single_line_mode(True)
+    label.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
+    frame.add(label)
+    win.add(frame)
+
+    provider = Gtk.CssProvider()
+    provider.load_from_data(CSS)
+    Gtk.StyleContext.add_provider_for_screen(
+        screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    # Dismiss on click as well as on the timer.
+    frame.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+    frame.connect("button-press-event", lambda *_: Gtk.main_quit())
+    win.connect("destroy", Gtk.main_quit)
+
+    win.show_all()
+    GLib.timeout_add(int(seconds * 1000), lambda: (Gtk.main_quit(), False)[1])
+    Gtk.main()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

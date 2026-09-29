@@ -116,10 +116,137 @@ and the screens at runtime.
 
 - Daemon: `~/.local/bin/launchpad-workspaces` (python3, stdlib only)
 - Unit:   `~/.config/systemd/user/launchpad-workspaces.service` (enabled, WantedBy=graphical-session.target)
+- `ls-ws`: `~/.local/bin/ls-ws` (python3, stdlib only) — see below
+- Banner helper: `~/.local/bin/ls-ws-banner` (python3 + GTK 3 via `gi`)
 
-This repo holds reference copies in `bin/` and `systemd/`. `logs/` has the full
+This repo holds reference copies in `bin/`, `tools/` and `systemd/`. `logs/` has the full
 Claude Code session transcript that built this (also covers the same-day boot-loop
 debugging and the Vortex keymap work).
+
+## `ls-ws` — what is on each desktop, from the terminal
+
+`tools/ls-ws` answers the same question the pad grid answers with its LEDs, but
+in text: which windows are on which desktop, on which screen.
+
+```sh
+ls-ws              # grouped by desktop, colour when stdout is a tty
+ls-ws --desc       # one-line summary beside each Desktop heading
+ls-ws --prompts    # name, status and last prompt of each claude session
+ls-ws --all        # include empty desktops
+ls-ws --json       # machine-readable, includes window pids
+ls-ws --timeout 5  # default 3s
+```
+
+### `--prompts` — telling claude sessions apart
+
+With a dozen sessions open, the window titles all say `claude` and the only
+thing that distinguishes them is what you last asked:
+
+```
+Desktop 5  — widgets · widgets-api · Chrome · +1 more
+  HDMI-A-1   code    widgets - Visual Studio Code
+     ↳ widgets-f1 · idle · "add a retry around the upload call"
+     ↳ widgets-api-e2 · idle · "push both PRs"
+Desktop 8  — sprockets · Slack
+     ↳ sprockets-b8 · busy · "why does the nightly job time out"
+```
+
+(Examples invented — the real ones are whatever you last typed.)
+
+The link is `~/.claude/sessions/<pid>.json`, which Claude Code writes for
+every live process: `{pid, sessionId, cwd, procStart, name, status, ...}`.
+That is an **exact** pid → session mapping, which the session tracker never
+had — it had to guess from cwd, and gave up when two sessions shared one
+(this is why the old note in `skill/SKILL.md` said same-cwd sessions were
+indistinguishable; that is now obsolete). There is still no session id in the
+environment and no open fd on the transcript, so this file is the only route.
+
+`procStart` is checked against field 22 of `/proc/<pid>/stat` so a recycled
+pid cannot pick up a dead session's file. The session id then names the
+transcript under `~/.claude/projects/<cwd with / replaced by ->/`, and the
+last prompt is the last `user` entry whose content is a plain string —
+a list means a `tool_result`, which is Claude's turn rather than yours.
+Transcripts run to megabytes with single lines of similar size, so it seeks
+backwards over growing slices instead of reading the file.
+
+Costs about 30 ms on top of a plain run, so it is a flag rather than default.
+`status` comes straight from the file: `busy` is the one wanting attention.
+
+### `--desc`, and what a desktop is "about"
+
+```
+Desktop 4  — attractor-screensaver · Notion · claude
+Desktop 5  — participant-tasks · constellation-portal
+Desktop 8  — leaddbs · e_harness · Slack · +1 more   ← current on HDMI-A-1, eDP-1
+```
+
+Each window contributes what it is *about* rather than what it is: the project
+of a `claude` session, a VS Code window's project, a Konsole's working
+directory, an `owner/repo` in a browser title, or a recognised service (mail,
+calendar, Notion). A window whose title says nothing useful falls back to its
+app name, and those sort last — so `leaddbs` outranks a bare `Chrome`.
+
+Within the real subjects, the one the most windows share leads: a desktop with
+a repo open in both an editor and a browser is mostly about that repo. Sitting
+in a container directory (`Projects`, `src`, `$HOME`) is not a subject, so
+those fall back to the app name too.
+
+All of it is heuristic title-reading, and titles lie — a browser caption is
+only ever the *active* tab. It is a glance, not an index. The same summary is
+what `--banner` puts on screen, so the two always agree.
+
+### The banner
+
+`ls-ws --banner` puts one very short line about the current desktop at the top
+of the screen for 30 seconds — what the grid says in LEDs, said in words:
+
+```sh
+ls-ws --banner                    # auto: "D5 · VS Code (participant-tasks) · Chrome"
+ls-ws --banner "deep work: trace" # your own text instead
+ls-ws --banner --banner-secs 10   # default 30
+ls-ws --banner --screen eDP-1     # default: the screen holding the active window
+```
+
+Click it to dismiss early. The auto text names up to three distinct apps on
+that desktop and that screen, annotated with the project of any `claude`
+session running inside them, then `+N more`.
+
+Drawing it takes a second process, `tools/ls-ws-banner`, because the daemon's
+stdlib-only rule cannot draw a window — it uses GTK 3 via `python3-gobject`,
+which is already on the host and in the toolbox (PySide6 is not on the host,
+so it is not an option). Wayland gives a client no way to place its own
+window, so the helper only draws; `ls-ws` then centres it at the top of the
+target screen with a KWin script that sets `frameGeometry`, `keepAbove` and
+`skipTaskbar` — the same geometry route the daemon uses to move windows
+between outputs, and for the same reason. If placement fails the banner is
+still up and readable, just wherever KWin first put it.
+
+`ls-ws` hides the banner window from its own listing by resourceClass, so
+`--banner` never shows you the banner.
+
+It uses the same channel the daemon does — a one-shot KWin script whose
+`console.error()` lands in the `plasma-kwin_wayland` journal — so it inherits
+the same constraint: there is no other way to get a value back out of KWin
+scripting. It grabs a journal cursor, loads and starts the probe under its own
+script name (`wsprobe`), then reads back from that cursor. Runs in ~120 ms.
+
+Two things make it fast, both worth keeping:
+
+- **Poll, do not follow.** `journalctl -f` costs a flat ~490 ms here — it falls
+  back to a 500 ms wait rather than waking on inotify. Re-reading
+  `--after-cursor` in a short backoff loop lands in ~30 ms.
+- KWin itself needs ~28 ms to run the probe and emit; the rest is ~17 ms python
+  startup, ~7 ms cursor read, ~12 ms for the three `busctl` calls.
+
+It also walks `/proc` ancestry to attach each running `claude` process to the
+window it lives inside — KWin only exposes a window's own pid (the terminal
+emulator), never the shell or the process inside it, the same limitation the
+Session-mode tracker works around. That is how a VS Code window gets labelled
+with the projects of the sessions running in its integrated terminals.
+
+The probe unloads itself in a `finally`, and `start()` only starts scripts that
+are not already running, so it never disturbs the persistent `padspace-events`
+script the daemon relies on.
 
 ## How it works
 
