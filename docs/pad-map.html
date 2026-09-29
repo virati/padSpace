@@ -1,0 +1,1467 @@
+<title>padSpace Pad Map</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans+Condensed:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style id="page-style">
+/* Layout: one reading column; the device map is the figure right under the header,
+   drawn as the hardware (dark body, 8x8 square pads, round buttons top and right). */
+:root {
+  --bg: #eef0f2;          /* cool grey ground, a touch blue like the device's plastic */
+  --surface: #f8f9fa;
+  --surface-2: #e3e6ea;
+  --ink: #16191d;
+  --ink-2: #454b53;
+  --ink-3: #6d747d;
+  --hair: rgba(22, 25, 29, .10);
+  --hair-2: rgba(22, 25, 29, .20);
+  --accent: #0f7a8a;      /* teal: links and the mode selector, never an LED color */
+  --body-case: #1c1f23;   /* the controller itself stays dark in both themes */
+  --body-edge: #2b3036;
+  --pad-off: #30353b;
+  --pad-label: rgba(255, 255, 255, .78);
+  --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --f-body: "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
+  --f-ui: "IBM Plex Sans Condensed", "IBM Plex Sans", -apple-system, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121417; --surface: #1a1d21; --surface-2: #24282d; --ink: #e8eaed; --ink-2: #b4bac2; --ink-3: #8a919a;
+  --hair: rgba(255, 255, 255, .10); --hair-2: rgba(255, 255, 255, .20); --accent: #4cc2d1;
+  --body-case: #0b0c0e; --body-edge: #262a30; --pad-off: #262a2f; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #121417; --surface: #1a1d21; --surface-2: #24282d; --ink: #e8eaed; --ink-2: #b4bac2; --ink-3: #8a919a;
+  --hair: rgba(255, 255, 255, .10); --hair-2: rgba(255, 255, 255, .20); --accent: #4cc2d1;
+  --body-case: #0b0c0e; --body-edge: #262a30; --pad-off: #262a2f; color-scheme: dark; }
+
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15.5px; line-height: 1.6; }
+.sheet { max-width: 760px; margin: 0 auto; padding-inline: 16px; padding-block: 32px 128px; }
+main { display: grid; gap: 40px; }
+main > section { min-width: 0; }
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.stamp { font-family: var(--f-mono); font-size: 12px; color: var(--ink-3); margin: 0 0 18px; }
+h1 { font-family: var(--f-display); font-weight: 800; font-size: clamp(26px, 5vw, 36px); line-height: 1.12; letter-spacing: -.01em; margin: 0 0 12px; text-wrap: balance; }
+h2 { font-family: var(--f-display); font-weight: 700; font-size: 21px; line-height: 1.25; margin: 0 0 10px; text-wrap: balance; }
+h3 { font-family: var(--f-ui); font-weight: 600; font-size: 15px; letter-spacing: .02em; margin: 20px 0 6px; }
+p, ul, ol { margin: 0 0 12px; max-width: 65ch; }
+li { margin-bottom: 4px; }
+.lede { font-size: 17px; color: var(--ink-2); margin-bottom: 28px; }
+code, .mono { font-family: var(--f-mono); font-size: .88em; }
+code { background: var(--surface-2); padding: 1px 5px; border-radius: 3px; }
+.note { font-size: 13.5px; color: var(--ink-2); border-left: 2px solid var(--hair-2); padding-left: 12px; }
+
+.tbl { overflow-x: auto; margin: 6px 0 14px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th { font-family: var(--f-ui); font-weight: 600; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--hair-2); }
+td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--hair); vertical-align: top; }
+td .mono { white-space: nowrap; font-variant-numeric: tabular-nums; }
+td code { overflow-wrap: anywhere; }
+.sw { display: inline-block; width: 11px; height: 11px; border-radius: 2px; vertical-align: -1px; margin-right: 6px; border: 1px solid var(--hair-2); }
+.sw.blink { animation: lp-blink 1s steps(1) infinite; }
+
+/* ---- the device figure ---- */
+.fig { margin: 0; }
+.modes { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px; }
+.mode-btn { font-family: var(--f-ui); font-size: 13.5px; font-weight: 500; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--hair-2); background: transparent; color: var(--ink); cursor: pointer; }
+.mode-btn:hover { border-color: var(--ink-3); }
+.mode-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.device { background: var(--body-case); border: 1px solid var(--body-edge); border-radius: 14px; padding: clamp(10px, 2.4vw, 20px); max-width: 560px; }
+.lp { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: clamp(4px, 1.1vw, 8px); }
+.lp-btn { position: relative; aspect-ratio: 1; max-width: 100%; border: 0; padding: 0; cursor: pointer; background: var(--pad-off); color: var(--pad-label); font-family: var(--f-mono); font-size: clamp(8px, 1.6vw, 10.5px); line-height: 1.05; display: flex; align-items: center; justify-content: center; text-align: center; overflow: hidden; border-radius: 4px; }
+.lp-btn.round { border-radius: 50%; transform: scale(.78); }
+.lp-btn.logo { background: transparent; cursor: default; color: var(--ink-3); }
+.lp-btn[data-lit] { box-shadow: 0 0 10px -2px var(--led); background: var(--led); color: var(--lab, rgba(0, 0, 0, .72)); }
+.lp-btn.flash { animation: lp-flash 1s steps(1) infinite; }
+.lp-btn.breathe { animation: lp-breathe var(--period, 2s) ease-in-out infinite; }
+.lp-btn.sel { outline: 2px solid #fff; outline-offset: 2px; }
+@keyframes lp-flash { 0% { background: var(--led); } 50% { background: var(--led-b, var(--pad-off)); } }
+@keyframes lp-blink { 50% { opacity: .25; } }
+@keyframes lp-breathe { 50% { filter: brightness(.35); } }
+@media (prefers-reduced-motion: reduce) { .lp-btn.flash, .lp-btn.breathe, .sw.blink { animation: none; } }
+.detail { margin-top: 12px; min-height: 3.4em; font-size: 14px; }
+.detail b { font-family: var(--f-ui); font-weight: 600; }
+.detail .id { font-family: var(--f-mono); font-size: 12px; color: var(--ink-3); margin-left: 6px; }
+figcaption { font-size: 13.5px; color: var(--ink-2); margin-top: 10px; max-width: 65ch; }
+
+:root { --bar-h: 52px; }
+
+/* ---- the bottom bar and the ask drawer -------------------------------------
+   The canonical editor (~/.claude/ARTIFACT-EDITOR.js) renders into #editor-bar and
+   builds the drawer at runtime; these are the only styles it needs. They live in
+   #page-style because rebuild() carries only #page-style, #dw-style and #editor-bar
+   into a saved version — a rule parked in any other block is lost on the first save. */
+#editor-bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 10000;
+  display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+  padding: 10px 16px; background: var(--surface); border-top: 1px solid var(--hair-2);
+  font-family: "IBM Plex Sans Condensed", "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  box-shadow: 0 -2px 14px rgba(0, 0, 0, .06);
+}
+.eb-btn {
+  font: inherit; font-size: 13px; padding: 5px 13px; border: 1px solid var(--hair-2);
+  border-radius: 4px; background: transparent; color: var(--ink); cursor: pointer; line-height: 1.5;
+}
+.eb-btn:hover:not(:disabled) { border-color: var(--ink-3); }
+.eb-btn:disabled { opacity: .55; cursor: default; }
+.eb-primary { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.eb-note { margin-right: auto; font-size: 12.5px; color: var(--ink-2); }
+#editor-toast {
+  position: fixed; left: 50%; bottom: calc(var(--bar-h) + 12px); transform: translateX(-50%); z-index: 10002;
+  background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 4px; font-size: 13px;
+  font-family: "IBM Plex Sans Condensed", sans-serif; max-width: min(92vw, 560px);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, .25);
+}
+#editor-toast[hidden] { display: none; }
+[data-editing="true"] [data-editable] { outline: 1px dashed var(--hair-2); outline-offset: 8px; }
+.ask-panel {
+  position: fixed; right: 16px; bottom: calc(var(--bar-h) + 10px); z-index: 10001; width: min(420px, calc(100vw - 32px));
+  max-height: min(60vh, 520px); display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--hair-2); border-radius: 6px;
+  box-shadow: 0 6px 28px rgba(0, 0, 0, .18);
+  font-family: "IBM Plex Sans Condensed", "IBM Plex Sans", -apple-system, sans-serif;
+}
+.ask-panel[hidden] { display: none; }
+.ask-head { padding: 10px 12px 8px; border-bottom: 1px solid var(--hair); }
+.ask-title { display: block; font-size: 13px; font-weight: 600; color: var(--ink); }
+.ask-head .ask-note { display: block; font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+.ask-log { flex: 1 1 auto; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.ask-turn p { margin: 0; font-size: 13px; line-height: 1.5; white-space: pre-wrap; max-width: none; }
+.ask-turn.ask-you { align-self: flex-end; background: var(--surface-2); border-radius: 10px 10px 2px 10px; padding: 7px 10px; max-width: 85%; }
+.ask-turn.ask-claude { align-self: flex-start; color: var(--ink-2); max-width: 95%; }
+.ask-turn.ask-note { align-self: flex-start; font-size: 11.5px; color: var(--ink-3); font-style: italic; }
+.ask-form { display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px; border-top: 1px solid var(--hair); }
+.ask-box {
+  flex: 1 1 auto; font: inherit; font-size: 13px; padding: 6px 8px; resize: vertical;
+  border: 1px solid var(--hair-2); border-radius: 4px; background: var(--bg); color: var(--ink);
+}
+@media print { #editor-bar, .ask-panel, #editor-toast { display: none !important; } }
+
+/* ---- the AI disclosure lives IN the bottom bar, on its left ------------------
+   One bar: the disclosure's own collapsed two-line summary occupies the left of it and the
+   Edit / Ask buttons the right. The kit renders into #disclosure-widget wherever rebuild()
+   puts it (inside .sheet), so this is done by CSS alone and an in-page save cannot lose it.
+   top:auto is load-bearing — the kit's own >=1520px rail rule sets top:72px, and this
+   selector only overrides the properties it names. */
+#disclosure-widget.disclosure {
+  position: fixed; top: auto; bottom: 0; left: 16px; right: 300px; z-index: 10001;
+  width: auto; max-width: none; height: var(--bar-h); margin: 0;
+  display: flex; align-items: center; overflow: hidden;
+  background: transparent; border: 0; box-shadow: none;
+}
+#disclosure-widget.disclosure .dw {
+  border: 0; border-radius: 0; background: transparent; padding: 0; margin: 0;
+  max-width: none; width: 100%;
+}
+/* Collapsed, the summary is a label on the left of the bar, not a stretched-out row:
+   without a cap the kit's space-between head pushes the pill into the middle of the page. */
+#disclosure-widget.disclosure .dw.dw-collapsed { padding: 0; width: auto; max-width: 520px; }
+/* Opened, it grows up out of the bar and takes the bar's surface with it. */
+#disclosure-widget.disclosure:not(:has(.dw-collapsed)) {
+  height: auto; display: block; align-items: initial;
+  max-height: min(72vh, 580px); overflow-y: auto; overscroll-behavior: contain;
+  left: 0; right: 292px; padding: 14px 16px;
+  background: var(--surface); border-top: 1px solid var(--hair-2);
+  box-shadow: 0 -2px 14px rgba(0, 0, 0, .06);
+}
+@media print {
+  #disclosure-widget.disclosure { position: static; height: auto; display: block;
+    max-height: none; overflow: visible; border-top: 0; box-shadow: none; padding: 0; }
+}
+/* A short viewport — a preview tile or a thumbnail capture — cannot spare a fixed
+   footer, so the whole bottom furniture falls back into the flow there. */
+@media (max-height: 460px) {
+  #editor-bar, #disclosure-widget.disclosure { position: static; box-shadow: none; }
+  #disclosure-widget.disclosure { height: auto; display: block; right: auto; left: auto; }
+  .sheet { padding-block: 24px 20px; }
+}
+/* No room for both halves side by side: the buttons keep the bar, the summary hides. */
+@media (max-width: 720px) {
+  #disclosure-widget.disclosure:has(.dw-collapsed) { display: none; }
+  #disclosure-widget.disclosure:not(:has(.dw-collapsed)) { right: 0; }
+}
+</style>
+<style id="dw-style">
+/* AI disclosure panel — kit v3 (2026-09-21). Lifted from Mehdi Azabou's report skeleton; the tokens are
+   self-contained so the panel looks the same on any page. Do not restyle it: the point is that every panel
+   across the team is the same panel. Green = human-led, purple = AI-led; the frame itself greens only for
+   the 75% human stamp.
+   v2: the panel opens collapsed to two lines — the head, and a one-line "how human is this page".
+   v3: at 75% human or more the whole frame goes green (.dw-human) — readable at a glance, either state. */
+.disclosure { --dw-bg: #ffffff; --dw-ink: rgba(0, 0, 0, .8); --dw-ink-1: rgba(0, 0, 0, 1); --dw-ink-2: rgba(0, 0, 0, .6); --dw-ink-3: rgba(0, 0, 0, .5); --dw-hair: rgba(0, 0, 0, .1); --dw-hair-2: rgba(0, 0, 0, .2); --dw-code-bg: rgba(0, 0, 0, .04); --dw-rule: rgba(0, 0, 0, .4); --dw-c3: #3a9d6e; --dw-c4: #8a5cb8; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", Arial, sans-serif; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .disclosure { --dw-bg: hsl(200, 14%, 9%); --dw-ink: rgba(255, 255, 255, .82); --dw-ink-1: #ffffff; --dw-ink-2: rgba(255, 255, 255, .62); --dw-ink-3: rgba(255, 255, 255, .5); --dw-hair: rgba(255, 255, 255, .12); --dw-hair-2: rgba(255, 255, 255, .22); --dw-code-bg: rgba(255, 255, 255, .07); --dw-rule: rgba(255, 255, 255, .4); --dw-c3: #43b384; --dw-c4: #a57bda; } }
+:root[data-theme="dark"] .disclosure { --dw-bg: hsl(200, 14%, 9%); --dw-ink: rgba(255, 255, 255, .82); --dw-ink-1: #ffffff; --dw-ink-2: rgba(255, 255, 255, .62); --dw-ink-3: rgba(255, 255, 255, .5); --dw-hair: rgba(255, 255, 255, .12); --dw-hair-2: rgba(255, 255, 255, .22); --dw-code-bg: rgba(255, 255, 255, .07); --dw-rule: rgba(255, 255, 255, .4); --dw-c3: #43b384; --dw-c4: #a57bda; }
+.dw, .dw * { box-sizing: border-box; }
+.dw .d-btn { font: inherit; font-size: 13px; padding: 4px 12px; border: 1px solid var(--dw-hair-2); border-radius: 3px; background: transparent; color: var(--dw-ink); cursor: pointer; }
+.dw .d-btn:hover { border-color: var(--dw-rule); }
+.dw .d-btn:disabled { opacity: .6; cursor: default; }
+.dw-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: hsl(200, 60%, 15%); color: #fff; padding: 8px 14px; border-radius: 4px; font-size: 13px; z-index: 20001; box-shadow: 0 2px 12px rgba(0, 0, 0, .25); max-width: min(92vw, 560px); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", Arial, sans-serif; }
+.dw-toast[hidden] { display: none; }
+.disclosure { container-type: inline-size; margin: 1.25rem 0 .25rem; font-size: 13px; line-height: 1.45; color: var(--dw-ink-2); }
+.dw { border: 1px solid var(--dw-hair-2); border-radius: 6px; padding: 12px 14px; background: var(--dw-bg); }
+.dw.dw-human { border-color: var(--dw-c3); background: color-mix(in srgb, var(--dw-c3) 14%, var(--dw-bg)); }
+.dw .ico { width: 13px; height: 13px; vertical-align: -2px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.dw-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.dw-title { font-weight: 600; color: var(--dw-ink-1); font-size: 13px; display: inline-flex; gap: 6px; align-items: center; }
+.dw-title .ico { width: 15px; height: 15px; color: var(--dw-c4); }
+.dw-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; padding: 2px 9px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
+.dw-pill.unrated { color: var(--dw-ink-3); border-color: var(--dw-hair-2); }
+.dw-pill.partial { color: var(--dw-c3); border-color: var(--dw-c3); }
+.dw-pill.checked { color: var(--dw-c3); border-color: var(--dw-c3); background: color-mix(in srgb, var(--dw-c3) 12%, transparent); }
+.dw-pill.verified { color: #fff; background: var(--dw-c3); border-color: var(--dw-c3); }
+.dw-read { margin: 8px 0 10px; color: var(--dw-ink); font-size: 13px; }
+.dw-axes { display: grid; grid-template-columns: 1fr; }
+.dw-axis { padding: 8px 0 9px; border-top: 1px solid var(--dw-hair); }
+.dw-axis-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.dw-axis .lbl { font-weight: 600; color: var(--dw-ink-1); font-size: 12.5px; }
+.dw-axis .lead-txt { font-size: 10.5px; color: var(--dw-ink-3); text-align: right; }
+.dw-scale { display: flex; justify-content: space-between; font-size: 9.5px; color: var(--dw-ink-3); text-transform: uppercase; letter-spacing: .06em; margin: 5px 0 3px; }
+.dw-scale span { display: inline-flex; align-items: center; gap: 3px; }
+.dw-scale .ico { width: 11px; height: 11px; }
+.seg { display: flex; gap: 3px; }
+.seg > * { flex: 1; height: 10px; border-radius: 2px; background: var(--dw-code-bg); border: 1px solid var(--dw-hair); padding: 0; font: inherit; }
+.seg > .on { background: var(--dw-c4); border-color: var(--dw-c4); }
+.seg > .on.h { background: var(--dw-c3); border-color: var(--dw-c3); }
+.seg > .was { background: transparent; border: 1.5px dashed var(--dw-c4); }
+.seg > .was.h { border-color: var(--dw-c3); }
+.dw.can-rate .seg > button { cursor: pointer; } .dw.can-rate .seg > button:hover { border-color: var(--dw-ink-2); }
+.dw-note { font-size: 12px; color: var(--dw-ink-2); margin: 6px 0 0; }
+.dw-note.ov { color: var(--dw-ink-1); }
+.dw-trust { display: flex; align-items: center; gap: 8px; margin-top: 7px; font-size: 11px; color: var(--dw-ink-3); flex-wrap: wrap; }
+.dots { display: inline-flex; gap: 4px; }
+.dots button { width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--dw-hair-2); background: transparent; font: inherit; font-size: 10px; line-height: 1; color: var(--dw-ink-3); display: inline-flex; align-items: center; justify-content: center; padding: 0; cursor: default; }
+.dots button.on { border-color: var(--dw-c3); color: var(--dw-c3); background: color-mix(in srgb, var(--dw-c3) 14%, transparent); }
+.dots button.cur { background: var(--dw-c3); border-color: var(--dw-c3); color: #fff; }
+.dw.can-rate .dots button { cursor: pointer; } .dw.can-rate .dots button:hover { border-color: var(--dw-c3); }
+.dw-metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--dw-hair); }
+.dw-metric { padding: 6px 8px 6px 10px; border-left: 2px solid var(--dw-hair-2); background: color-mix(in srgb, var(--dw-hair) 40%, transparent); border-radius: 0 4px 4px 0; }
+.dw-metric b { display: block; font-size: 15px; font-weight: 600; color: var(--dw-ink-1); font-variant-numeric: tabular-nums; line-height: 1.2; }
+.dw-metric b small { font-size: 11px; font-weight: 400; color: var(--dw-ink-3); }
+.dw-metric span { font-size: 10px; color: var(--dw-ink-3); text-transform: uppercase; letter-spacing: .05em; }
+.dw details { margin-top: 10px; font-size: 12px; } .dw summary { cursor: pointer; color: var(--dw-ink-2); font-weight: 600; font-size: 12px; }
+.dw details ul { margin: 4px 0 8px; padding-left: 16px; } .dw details li { margin-bottom: 3px; }
+.dw details .dw-note b { color: var(--dw-ink-1); font-weight: 600; }
+.dw-foot { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--dw-hair); font-size: 11px; color: var(--dw-ink-3); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 10px; }
+.dw-foot span { display: inline-flex; align-items: center; gap: 5px; }
+.dw-save { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.dw-save .d-btn.primary { background: var(--dw-c3); border-color: var(--dw-c3); color: #fff; }
+.dw textarea { width: 100%; margin-top: 8px; font: inherit; font-size: 12px; padding: 6px; border: 1px solid var(--dw-hair-2); border-radius: 3px; background: var(--dw-bg); color: var(--dw-ink); resize: vertical; min-height: 44px; }
+/* collapsed: two small lines until the reader opens it. Line 1 is the head; line 2 is the human summary. */
+.dw-summary { display: grid; gap: 3px; width: 100%; font: inherit; color: inherit; background: transparent; border: 0; padding: 0; margin: 0; text-align: left; cursor: pointer; }
+.dw-summary .dw-head { flex-wrap: nowrap; }
+.dw-summary .dw-pill { overflow: hidden; text-overflow: ellipsis; }
+.dw-chev { flex: none; margin-left: 2px; color: var(--dw-ink-3); transition: transform .15s ease; }
+.dw:not(.dw-collapsed) .dw-chev { transform: rotate(180deg); }
+.dw-summary:hover .dw-chev, .dw-summary:focus-visible .dw-chev { color: var(--dw-ink-1); }
+.dw-sum { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 11px; color: var(--dw-ink-2); }
+.dw-sum b { font-weight: 600; color: var(--dw-ink-1); font-variant-numeric: tabular-nums; }
+.dw-sum .txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dw-hbar { display: inline-flex; gap: 2px; flex: none; }
+.dw-hbar i { width: 9px; height: 6px; border-radius: 1px; background: var(--dw-code-bg); border: 1px solid var(--dw-hair); }
+.dw-hbar i.h { background: var(--dw-c3); border-color: var(--dw-c3); }
+.dw-hbar i.a { background: var(--dw-c4); border-color: var(--dw-c4); }
+.dw.dw-collapsed { padding: 8px 10px; }
+.dw.dw-collapsed .dw-body { display: none; }
+.dw:not(.dw-collapsed) .dw-sum { display: none; }
+@container (min-width: 560px) {
+  .dw-axes { grid-template-columns: repeat(4, 1fr); gap: 0 18px; }
+  .dw-metrics { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+}
+@media (min-width: 1520px) {
+  .disclosure:not(.dw-inline) { position: fixed; top: 72px; left: calc(50vw + 568px); width: min(300px, calc(50vw - 576px)); max-height: calc(100vh - 170px); overflow-y: auto; margin: 0; z-index: 1; }
+}
+@media print { .disclosure { position: static; width: auto; } .dw .dw-body { display: block !important; } .dw .dw-sum, .dw .dw-chev { display: none !important; } }
+</style>
+<div id="editor-bar"></div>
+<div class="sheet">
+<header data-editable="header">
+<p class="stamp">First published 2026-09-29 16:51 PT · Last updated 2026-09-29 16:51 PT</p>
+<h1>padSpace pad map: Launchpad Mini MK3, main at 300d507</h1>
+<p class="lede">Every pad and round button on the Launchpad, what it does in each mode, and what its light means. Everything here is read from the daemon on <code>main</code> at commit <code>300d507</code> (2026-09-29).</p>
+</header>
+<div id="disclosure-widget" aria-label="AI disclosure"></div>
+<script type="application/json" id="disclosure">
+{
+  "schema": 1,
+  "agent": {
+    "model": "Claude Opus 5.5",
+    "axes": {
+      "framing": {
+        "lead": 2,
+        "note": "Vin asked for an outline of every pad feature; Claude chose the device map and the section order."
+      },
+      "evidence": {
+        "lead": 3,
+        "note": "Claude read every fact from the daemon source on main (300d507), the padspace skill, and the ~/.ctrl folders."
+      },
+      "analysis": {
+        "lead": 3,
+        "note": "Claude decided what to include and which features count as unverified."
+      },
+      "drafting": {
+        "lead": 3,
+        "note": "Claude wrote all the text and the interactive map; Vin has not edited it."
+      }
+    },
+    "fromHuman": [
+      "The request: a branch and an artifact outlining all the features of the pads",
+      "The agent-flash design goal: green when a session finished, red when it needs input",
+      "Seeing the green agent flash on the device on 2026-09-29"
+    ],
+    "synthesis": [
+      "The pad, by mode: the interactive map, its per-pad descriptions, and the example workspace state",
+      "Workspace grid: the light and flash tables, written from the daemon's color constants",
+      "How the agent flash works: the summary of PR #2",
+      "Round buttons and the four modes: the table and the four mode descriptions",
+      "Your own commands on any free pad: the rules, including that modes take precedence over bottom-row bindings",
+      "Running it: the task table and the ls-ws summary"
+    ],
+    "evidence": "Read in full: bin/launchpad-workspaces on main, the padspace skill, install.sh, bindings.conf, ~/.ctrl/claude and ~/.ctrl/hermes listings. Nothing fetched from outside.",
+    "unsourced": [
+      "The on-screen LED colors are Claude's approximations of the Launchpad palette indices",
+      "The ~10 ms report latency comes from the padspace skill, not re-measured"
+    ],
+    "uncertain": [
+      "Red agent flash from a real permission prompt has not been seen on the device",
+      "Green agent flash clearing on focus has not been confirmed",
+      "Pressing a Session-mode pad has never been tried on the device"
+    ],
+    "sessions": [
+      {
+        "date": "2026-09-29",
+        "model": "Claude Opus 5.5",
+        "turns": 1,
+        "what": "Built the page on branch pad-features-doc from main at 300d507"
+      }
+    ],
+    "versions": 1
+  },
+  "human": {
+    "name": "Vineet Tiruvadi",
+    "trust": {},
+    "lead": {}
+  },
+  "metrics": {}
+}
+</script>
+<main>
+<section data-editable="figure">
+<h2>The pad, by mode</h2>
+<figure class="fig">
+<div id="padmap" data-generated></div>
+<figcaption>Pick a mode, then tap or hover a pad to see what it does. The top two pad rows are the workspace grid in every mode. The grid shows an example state, not your live desktops, including one green and one red agent flash. The on-screen colors are close to the device palette, not exact.</figcaption>
+</figure>
+</section>
+
+<section data-editable="workspace">
+<h2>Workspace grid (top two pad rows, always on)</h2>
+<p>The top two pad rows are two 2×4 grids, one per display. Each grid is fixed to its display by screen order, not by focus.</p>
+<div class="tbl"><table>
+<thead><tr><th>Pads</th><th>Display</th><th>Desktops</th></tr></thead>
+<tbody>
+<tr><td class="mono">81–84 / 71–74</td><td>Screen 0: HDMI-A-1, the ultrawide (left grid)</td><td>1–4 on top, 5–8 below</td></tr>
+<tr><td class="mono">85–88 / 75–78</td><td>Screen 1: eDP-1, the laptop (right grid)</td><td>1–4 on top, 5–8 below</td></tr>
+</tbody></table></div>
+<ul>
+<li><b>Tap</b> switches that display to that desktop.</li>
+<li><b>Hold for 0.55 s or longer</b> also moves the window you were using to that desktop. Holding a pad on the other grid moves the window to the other display. The pads have no velocity sensing (every hit sends 127), so hold time stands in for pressing hard.</li>
+</ul>
+<h3>What the light means</h3>
+<div class="tbl"><table>
+<thead><tr><th>Light</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><span class="sw" style="background:#ffffff"></span>White</td><td>The display's current desktop</td></tr>
+<tr><td><span class="sw" style="background:#ff3b30"></span>Red</td><td>Desktop has a VS Code window</td></tr>
+<tr><td><span class="sw" style="background:#2fd158"></span>Green</td><td>Desktop has the Notion "Vineet Work Log" page as the active tab</td></tr>
+<tr><td><span class="sw" style="background:#3b82f6"></span>Blue</td><td>Desktop has Slack</td></tr>
+<tr><td><span class="sw" style="background:#22d3ee"></span>Cyan</td><td>Work log and Slack on the same desktop</td></tr>
+<tr><td><span class="sw" style="background:#6b6f75"></span>Dim white</td><td>Desktop has other windows</td></tr>
+<tr><td><span class="sw" style="background:var(--pad-off)"></span>Off</td><td>Empty desktop, or that display is not connected (whole grid dark)</td></tr>
+</tbody></table></div>
+<p>White wins over the app colors. When several apps are on one desktop, the earliest rule in <code>MARKERS</code> wins, unless <code>MARKER_COMBOS</code> names that pair. Updates come from a KWin script that reports within about 10 ms of a desktop switch, window move or title change. A 5 s poll is only a backup.</p>
+<h3>Flashing pads</h3>
+<div class="tbl"><table>
+<thead><tr><th>Flash</th><th>Meaning</th><th>Stops when</th></tr></thead>
+<tbody>
+<tr><td><span class="sw blink" style="background:#2fd158"></span>Green</td><td>A Claude Code session on that desktop finished its turn</td><td>You focus that session's window</td></tr>
+<tr><td><span class="sw blink" style="background:#ff3b30"></span>Red</td><td>A Claude Code session there is waiting on you: a permission prompt, a question or MCP dialog, or a failed turn</td><td>The session carries on: you answer, a tool runs, or you send a prompt</td></tr>
+<tr><td><span class="sw blink" style="background:#9a9ea4"></span>Bright/dim of its own color</td><td>A window on that desktop is asking for attention (KWin urgency)</td><td>The window stops asking</td></tr>
+</tbody></table></div>
+</section>
+
+<section data-editable="agents">
+<h2>How the agent flash works</h2>
+<p>Added on 2026-09-29 (PR #2). The flash alternates with the pad's normal color, so the current desktop still reads white. Red wins over green on a shared pad.</p>
+<ul>
+<li><b>Hook.</b> <code>~/.local/bin/padspace-agent-hook</code> is a Claude Code hook on Stop, StopFailure, Notification, UserPromptSubmit and PostToolUse. It writes each session's last state to <code>~/.local/state/padspace/agents/&lt;session_id&gt;.json</code>. <code>tools/install-agent-hooks.py</code> adds it to <code>~/.claude/settings.json</code>, and <code>--remove</code> takes it out.</li>
+<li><b>Session file.</b> <code>~/.claude/sessions/&lt;pid&gt;.json</code> tells the daemon which process each session is and whether it is idle. Its <code>waiting</code> status also counts as red. It is not enough on its own, because a tool-permission prompt leaves it at <code>busy</code>.</li>
+<li><b>Which pad.</b> The session's pad is the desktop of the window it runs in: the window whose pid is one of the session process's parents (its Konsole).</li>
+</ul>
+<p class="note">Seen on the device: green, from a real Stop hook, on 2026-09-29. Not yet seen: red from a real permission prompt, and green clearing on focus. Only sessions on this machine count; Polaris sessions have no local window.</p>
+</section>
+
+<section data-editable="modes">
+<h2>Round buttons and the four modes</h2>
+<div class="tbl"><table>
+<thead><tr><th>Button</th><th>Label</th><th>Does</th><th>Light when on</th></tr></thead>
+<tbody>
+<tr><td class="mono">cc91–94</td><td>↑ ↓ ← →</td><td>Real arrow keys in the focused window, via ydotoold. One key per press, no repeat.</td><td>Always dim white</td></tr>
+<tr><td class="mono">cc95</td><td>Session</td><td>Bottom two rows show running Claude Code sessions</td><td>White</td></tr>
+<tr><td class="mono">cc96</td><td>Drums</td><td>Bottom two rows play a 16-pad drum kit</td><td>Amber</td></tr>
+<tr><td class="mono">cc97</td><td>Keys</td><td>Bottom-left 3×4 block types digits</td><td>Green</td></tr>
+<tr><td class="mono">cc98</td><td>User</td><td>Bottom two rows launch skills</td><td>White</td></tr>
+</tbody></table></div>
+<p>The four mode buttons are toggles, and only one can be on at a time. Turning one on turns the others off. With all four off, the bottom rows are dark and only the workspace grid is live. That is also how the daemon starts.</p>
+<h3>Session (cc95)</h3>
+<p>Bottom row (11–18): Claude Code sessions on this machine. Second row (21–28): your own sessions on Polaris, checked over SSH every 6 s in a background thread. Other users' Polaris sessions are never shown. Green means the last tool result had no error, red means it did, and dim white means the transcript could not be read. Pressing a pad focuses that session's window and switches to its desktop. If there is no window (always the case for Polaris), it opens a new Konsole running <code>claude --resume</code>.</p>
+<p class="note">Pressing a Session pad has not been tried on the device yet.</p>
+<h3>Drums (cc96)</h3>
+<p>Sixteen synthesized 909/808-style samples, preloaded into PipeWire when the mode turns on. Bottom row: kick-punch, kick-sub, kick-hard, snare, clap, hat-closed, hat-open, crash. Second row: sub-drop, tom-low, tom-high, shaker, pluck, snap, ride, reverse-cymbal. To change a sound, replace the same-named WAV in <code>~/.local/share/padspace/drumkit/</code> and toggle Drums again.</p>
+<h3>Keys (cc97)</h3>
+<p>A numpad in the bottom-left 3×4 block: 7 8 9 / 4 5 6 / 1 2 3, and a wide 0 across the three bottom pads. Each digit pad breathes green once every N seconds (pad 7 every 7 s); the 0 row glows steadily.</p>
+<h3>User (cc98)</h3>
+<p>Bottom row, amber: Claude Code skills from <code>~/.ctrl/claude/</code>. Second row, blue: Hermes skills from <code>~/.ctrl/hermes/</code>. Up to 8 per row, sorted by the number prefix, re-read every time the mode turns on. A press opens a Konsole with that skill. Today the rows hold constellupdates, coremap, padspace, linear-issue, and research, productivity, note-taking, devops.</p>
+</section>
+
+<section data-editable="bindings">
+<h2>Your own commands on any free pad</h2>
+<p>Any pad outside the workspace grid, and any of the right-hand round buttons (cc19–89), can run a shell command. Add lines to <code>~/.config/padspace/bindings.conf</code>; the file reloads within about 3 s.</p>
+<pre class="tbl"><code>36 = konsole                      # pad 36 opens a terminal
+12 @13 = playerctl play-pause     # pad 12, lit yellow (palette 13)
+cc59 @5 = loginctl lock-session   # right-column button, lit red</code></pre>
+<ul>
+<li>Bound pads stay lit (blue by default) and flash white on press. Commands run detached through <code>systemd-run --user</code>.</li>
+<li>The workspace grid (71–78, 81–88) and the top round row (cc91–98) are reserved. A binding on them is logged and ignored.</li>
+<li>When a mode is on, it owns its pads. A binding on the bottom two rows only fires while all four modes are off.</li>
+<li>No bindings are set today.</li>
+<li>To find a button's number, press it and look for the "unbound pad note N" or "unbound control ccN" line in the daemon log.</li>
+</ul>
+</section>
+
+<section data-editable="device">
+<h2>Running it</h2>
+<div class="tbl"><table>
+<thead><tr><th>Task</th><th>How</th></tr></thead>
+<tbody>
+<tr><td>Watch presses and decisions</td><td><code>journalctl --user -u launchpad-workspaces -f</code></td></tr>
+<tr><td>Restart (from the claudebox toolbox)</td><td><code>busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager RestartUnit ss launchpad-workspaces.service replace</code></td></tr>
+<tr><td>Hand the pad back for music</td><td>Stop the service. On stop it puts the Launchpad back in its standalone mode.</td></tr>
+<tr><td>Unplug and replug</td><td>Handled. The daemon checks the MIDI ports every 5 s and reconnects when they change.</td></tr>
+<tr><td>Install or refresh</td><td><code>./install.sh</code> in the repo: daemon, <code>ls-ws</code>, hook, units, and the hook entries in Claude settings</td></tr>
+</tbody></table></div>
+<h3>The same view in a terminal</h3>
+<p><code>ls-ws</code> lists the windows on each desktop, per display. <code>--desc</code> adds a one-line summary per desktop, <code>--prompts</code> shows each Claude session's status and last prompt, and <code>--banner</code> shows a 30 s summary at the top of the screen.</p>
+<p class="note">Files: daemon <code>bin/launchpad-workspaces</code>, installed at <code>~/.local/bin/launchpad-workspaces</code>; unit <code>launchpad-workspaces.service</code>; repo <code>~/Projects/padSpace</code> (<a href="https://github.com/virati/padSpace">github.com/virati/padSpace</a>).</p>
+</section>
+</main>
+</div>
+<script id="editor-script">
+(function () {
+  'use strict';
+
+  var ORDER = ["header", "figure", "workspace", "agents", "modes", "bindings", "device"];
+  var SHELL = {
+    header:    ['<header data-editable="header">', '</header>'],
+    figure:    ['<section data-editable="figure">', '</section>'],
+    workspace: ['<section data-editable="workspace">', '</section>'],
+    agents:    ['<section data-editable="agents">', '</section>'],
+    modes:     ['<section data-editable="modes">', '</section>'],
+    bindings:  ['<section data-editable="bindings">', '</section>'],
+    device:    ['<section data-editable="device">', '</section>'],
+  };
+  var ABOVE = { header: 1 };
+
+  /* ================= CANONICAL BELOW — verbatim from ~/.claude/ARTIFACT-EDITOR.js
+     Do not edit, rename or "improve" anything past this line. It is the tested
+     publish path; a page that diverges from it is refused at publish time. */
+  var $ = function (s) { return document.querySelector(s); };
+  var region = function (k) { return document.querySelector('[data-editable="' + k + '"]'); };
+  var editing = false, saving = false, snapshot = null;
+
+  /** A region's canonical content: generated output is emptied first, so a
+   *  rendered chart or table never enters the saved document. */
+  function harvest(k) {
+    var el = region(k);
+    if (!el) { return ''; }
+    var c = el.cloneNode(true);
+    Array.prototype.forEach.call(c.querySelectorAll('[data-generated]'), function (g) { g.innerHTML = ''; });
+    Array.prototype.forEach.call(c.querySelectorAll('[contenteditable]'), function (g) {
+      g.removeAttribute('contenteditable');
+    });
+    return c.innerHTML;
+  }
+
+  function blockHTML(sel) { var el = $(sel); return el ? el.outerHTML : ''; }
+
+  /** The current disclosure data — the kit mutates its own copy in memory, so
+   *  ask it rather than re-reading the stale script tag. */
+  function disclosureJSON() {
+    var el = $('#disclosure');
+    try {
+      if (window.AIDisclosure && typeof window.AIDisclosure.data === 'function') {
+        var d = window.AIDisclosure.data();
+        if (d) { return JSON.stringify(d, null, 2).replace(/</g, '\\u003c'); }
+      }
+    } catch (e) { /* fall back to what is on the page */ }
+    return el ? el.textContent : '{}';
+  }
+
+  function rebuild() {
+    var head = '<meta charset="utf-8">\n<title>' +
+      (document.title || 'Artifact').replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</title>\n';
+    var link = $('link[rel="stylesheet"]');
+    if (link) { head += link.outerHTML + '\n'; }
+
+    var above = '', body = '';
+    ORDER.forEach(function (k) {
+      var sh = SHELL[k];
+      if (!sh) { return; }
+      var part = sh[0] + harvest(k) + sh[1] + '\n';
+      if (ABOVE[k]) { above += part; } else { body += part; }
+    });
+
+    var sheet =
+      '<div class="sheet">\n' + above +
+      '<div id="disclosure-widget" aria-label="AI disclosure"></div>\n' +
+      '<script type="application/json" id="disclosure">\n' + disclosureJSON() + '\n<\/script>\n' +
+      shelfMetaBlock() +
+      '<main>\n' + body + '</main>\n</div>\n';
+
+    return '<!doctype html>\n<html>\n<head>\n' + head + '</head>\n<body>\n'
+      + blockHTML('#page-style') + '\n'
+      + blockHTML('#dw-style') + '\n'
+      + blockHTML('#editor-bar') + '\n'
+      + sheet
+      + blockHTML('#tip') + '\n'
+      + blockHTML('#editor-script') + '\n'
+      + blockHTML('#chart-script') + '\n'
+      + blockHTML('#dw-script') + '\n'
+      + '</body>\n</html>\n';
+  }
+
+  /* ---- the single publish path -------------------------------------- */
+  var nsPromise = null;
+  function artifactNS() {
+    if (!nsPromise) {
+      nsPromise = (window.claude && typeof window.claude.use === 'function')
+        ? window.claude.use('artifact') : Promise.resolve(null);
+    }
+    return nsPromise;
+  }
+
+  /** Wrap claude.use so the disclosure kit's "Save rating" publishes this
+   *  rebuild instead of its own DOM serialization. The resolved namespace is
+   *  platform-owned and frozen, so this wraps it rather than mutating it. */
+  function wrapClaude(c) {
+    if (!c || typeof c.use !== 'function' || c.__editorWrapped) { return; }
+    var realUse = c.use.bind(c);
+    c.use = function (name) {
+      return realUse(name).then(function (ns) {
+        if (name !== 'artifact' || !ns || typeof ns.publish !== 'function') { return ns; }
+        // A PLAIN object, never Object.create(ns) with an assignment over it:
+        // the platform namespace is frozen, so shadowing its non-writable
+        // `publish` throws TypeError in strict mode. That throw rejected the
+        // use() promise, which silently cost an edit — the save button hung
+        // and the kit lost its namespace at the same time.
+        var proxy = {};
+        Object.keys(ns).forEach(function (k) {
+          proxy[k] = (typeof ns[k] === 'function')
+            ? function () { return ns[k].apply(ns, arguments); }
+            : ns[k];
+        });
+        proxy.publish = function () { return ns.publish(rebuild()); };
+        return proxy;
+      });
+    };
+    c.__editorWrapped = true;
+  }
+  try {
+    if (window.claude) { wrapClaude(window.claude); }
+    else {
+      var held;
+      Object.defineProperty(window, 'claude', {
+        configurable: true,
+        get: function () { return held; },
+        set: function (v) { held = v; wrapClaude(v); }
+      });
+    }
+  } catch (e) { /* the page still reads fine without in-page saving */ }
+
+  /* ---- toolbar ------------------------------------------------------- */
+  function setEditing(on) {
+    editing = on;
+    ORDER.forEach(function (k) {
+      var el = region(k);
+      if (!el) { return; }
+      if (on) { el.setAttribute('contenteditable', 'true'); }
+      else { el.removeAttribute('contenteditable'); }
+      // Charts and the table redraw themselves; they are not text to edit.
+      Array.prototype.forEach.call(el.querySelectorAll('[data-generated]'), function (g) {
+        g.setAttribute('contenteditable', 'false');
+      });
+    });
+    document.body.setAttribute('data-editing', on ? 'true' : 'false');
+    render();
+  }
+
+  function render() {
+    var bar = $('#editor-bar');
+    if (!bar) { return; }
+    bar.innerHTML = editing
+      ? '<span class="eb-note">Editing — your text is the record</span>' +
+        '<button type="button" class="eb-btn eb-primary" data-a="save">' + (saving ? 'Saving…' : 'Save') + '</button>' +
+        '<button type="button" class="eb-btn" data-a="cancel">Cancel</button>'
+      : '<button type="button" class="eb-btn" data-a="shelf">' +
+          (shelfOpen ? 'Close' : (shelfDesc ? 'Shelf description' : 'Add shelf description')) + '</button>' +
+        '<button type="button" class="eb-btn" data-a="edit">Edit this page</button>' +
+        (askReady ? '<button type="button" class="eb-btn eb-ask" data-a="ask">' +
+          (askOpen ? 'Close' : 'Ask about this page') + '</button>' : '');
+    Array.prototype.forEach.call(bar.querySelectorAll('button'), function (b) {
+      b.disabled = saving;
+      b.addEventListener('click', function () { act(b.getAttribute('data-a')); });
+    });
+  }
+
+  function toast(msg) {
+    var t = $('#editor-toast');
+    if (!t) { t = document.createElement('div'); t.id = 'editor-toast'; document.body.appendChild(t); }
+    t.textContent = msg; t.hidden = false;
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function () { t.hidden = true; }, 6000);
+  }
+
+  function act(a) {
+    if (a === 'ask') { if (shelfOpen) { closeShelf(); } askOpen ? closeAsk() : openAsk(); return; }
+    if (a === 'shelf') { if (askOpen) { closeAsk(); } shelfOpen ? closeShelf() : openShelf(); return; }
+    if (a === 'edit') {
+      if (shelfOpen) { closeShelf(); }
+      snapshot = {};
+      ORDER.forEach(function (k) { var el = region(k); if (el) { snapshot[k] = el.innerHTML; } });
+      setEditing(true);
+      return;
+    }
+    if (a === 'cancel') {
+      if (snapshot) {
+        ORDER.forEach(function (k) {
+          var el = region(k);
+          if (el && snapshot[k] != null) { el.innerHTML = snapshot[k]; }
+        });
+      }
+      setEditing(false);
+      redrawGenerated();
+      return;
+    }
+    if (a === 'save' && !saving) {
+      saving = true; render();
+      keepDraft();                       // the text survives whatever happens next
+      artifactNS().then(function (ns) {
+        if (!ns) { throw { code: 'not_writer' }; }
+        // The html is passed explicitly rather than relying on the wrapper, so
+        // this path works even if claude.use was never wrapped.
+        return ns.publish(rebuild());
+      }).then(function () {
+        dropDraft();
+        toast('Saved — reloading to the new version…');
+      })['catch'](function (e) {
+        saving = false; render();
+        var code = (e && e.code) || 'unknown';
+        toast(code === 'not_writer'
+          ? 'This view is read-only — only the author can save. Your text is still here.'
+          : code === 'conflict'
+            ? 'A newer version was published first. Your text is kept as a draft — reload and restore it.'
+            : 'Save failed (' + code + '). Your text is kept as a draft and stays on screen.');
+      });
+    }
+  }
+
+  /** After a cancel the regions were replaced wholesale, so anything the page
+   *  draws into them has to be drawn again. */
+  function redrawGenerated() {
+    try { if (typeof window.redrawCharts === 'function') { window.redrawCharts(); } } catch (e) { /* leave it */ }
+  }
+
+  /* ---- draft safety net ------------------------------------------------
+     A failed save must never cost the text again. Edits are mirrored to this
+     viewer's own browser storage while editing, and offered back on the next
+     load. Every access is guarded: storage throws outright in some contexts,
+     and losing a draft is a smaller problem than a page that will not render. */
+  var DRAFT_KEY = 'artifact-draft:' + (document.title || 'page');
+
+  function keepDraft() {
+    var regions = {};
+    ORDER.forEach(function (k) { regions[k] = harvest(k); });
+    try {
+      window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ at: new Date().toISOString(), regions: regions }));
+    } catch (e) { /* no draft is kept; the text is still on screen */ }
+  }
+  function readDraft() {
+    try {
+      var raw = window.localStorage.getItem(DRAFT_KEY);
+      if (!raw) { return null; }
+      var d = JSON.parse(raw);
+      return (d && d.regions) ? d : null;
+    } catch (e) { return null; }
+  }
+  function dropDraft() {
+    try { window.localStorage.removeItem(DRAFT_KEY); } catch (e) { /* nothing to undo */ }
+  }
+  function restoreDraft(d) {
+    ORDER.forEach(function (k) {
+      var el = region(k);
+      if (el && d.regions[k] != null) { el.innerHTML = d.regions[k]; }
+    });
+    redrawGenerated();
+    dropDraft();
+    setEditing(true);
+    toast('Unsaved edits restored. Save again when you are ready.');
+  }
+
+  /** While editing, mirror the text on a quiet keystroke. */
+  var draftTimer = null;
+  document.addEventListener('input', function () {
+    if (!editing) { return; }
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(keepDraft, 600);
+  }, true);
+
+  function offerDraft() {
+    var d = readDraft();
+    if (!d || editing) { return; }
+    var bar = $('#editor-bar');
+    if (!bar) { return; }
+    var when = '';
+    try { when = new Date(d.at).toLocaleString(); } catch (e) { /* unlabelled is fine */ }
+    bar.innerHTML = '<span class="eb-note">Unsaved edits' + (when ? ' from ' + when : '') + '</span>' +
+      '<button type="button" class="eb-btn eb-primary" data-a="restore">Restore</button>' +
+      '<button type="button" class="eb-btn" data-a="discard">Discard</button>';
+    bar.querySelector('[data-a="restore"]').addEventListener('click', function () { restoreDraft(d); });
+    bar.querySelector('[data-a="discard"]').addEventListener('click', function () { dropDraft(); render(); });
+  }
+
+
+  /* ---- ask Claude about this page --------------------------------------
+     A drawer above the bar: transcript, question box, Stop. It is created at
+     runtime and appended to <body>, so it can never enter a saved version —
+     rebuild() assembles the document from a fixed list of blocks and anything
+     outside that list simply does not appear. (An earlier bar serialized
+     document.body and needed a self-stripping hack to avoid baking itself in
+     and duplicating on every load; the quine rebuild removes that whole class
+     of problem, so nothing here strips anything.)
+
+     Answers run on the VIEWER's own Claude account and cost the viewer usage,
+     so: the button appears only once use('sample') has resolved, a call is
+     only ever made on an explicit click, and any code meaning "not available
+     to this viewer" hides the feature for good rather than re-asking. */
+  var askNS = null, askReady = false, askOpen = false, asking = false, askCtl = null;
+  var askTurns = [];                // sample() has no memory; the page keeps it
+  var askEls = null;
+
+  /** Standing instructions ride as a leading user turn that is always kept —
+   *  there is no system role on this contract. */
+  function askRules() {
+    return 'You are answering a reader\'s questions about the document below. ' +
+      'Answer only from the document. If it does not cover the question, say so ' +
+      'plainly and stop — never fill the gap from general knowledge. Be short and ' +
+      'concrete, and quote the document\'s own figures rather than recomputing them.' +
+      '\n\n=== DOCUMENT ===\n' + pageText();
+  }
+
+  /** The document as Claude sees it: the editable regions' text with generated
+   *  output dropped, trimmed to stay well inside the 64 KiB input cap. */
+  function pageText() {
+    var parts = [];
+    ORDER.forEach(function (k) {
+      var el = region(k);
+      if (!el) { return; }
+      var c = el.cloneNode(true);
+      Array.prototype.forEach.call(c.querySelectorAll('[data-generated]'), function (g) {
+        if (g.parentNode) { g.parentNode.removeChild(g); }
+      });
+      var t = (c.textContent || '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+      if (t) { parts.push(t); }
+    });
+    var all = ((document.title || '') + '\n\n' + parts.join('\n\n')).trim();
+    return all.length > 12000 ? all.slice(0, 12000) + '\n[document truncated]' : all;
+  }
+
+  /** Viewer-facing copy per error code. `hide` means never offer it again in
+   *  this view: the viewer cannot grant it by trying harder. */
+  function askError(code) {
+    switch (code) {
+      case 'not_granted': case 'sampling_disabled': case 'not_declared':
+      case 'capability_disabled': case 'capability_removed':
+        return { hide: true };
+      case 'rate_limited':
+        return { msg: 'Too many questions at once. Give it a minute and ask again.' };
+      case 'session_expired':
+        return { msg: 'Sign in to Claude again to keep asking.' };
+      case 'prompt_too_large':
+        return { msg: 'This page is too long to ask about in one go.' };
+      case 'refused':
+        return { msg: 'Claude declined to answer that one. Try asking it differently.', clear: true };
+      case 'empty_completion':
+        return { msg: 'No answer came back. Try asking for less at a time.' };
+      case 'invalid_request': case 'transform_error':
+        return { msg: 'That question could not be sent. Try rewording it.' };
+      default:
+        return { msg: 'Could not reach Claude. Your question is still here — try again.' };
+    }
+  }
+
+  function askEl(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) { e.className = cls; }
+    if (text != null) { e.textContent = text; }
+    return e;
+  }
+
+  function buildAsk() {
+    if (askEls) { return askEls; }
+    var panel = askEl('div', 'ask-panel');
+    panel.id = 'editor-ask';
+    panel.setAttribute('aria-label', 'Ask about this page');
+
+    var head = askEl('div', 'ask-head');
+    head.appendChild(askEl('span', 'ask-title', 'Ask about this page'));
+    var note = askEl('span', 'ask-note', 'Answers come from this page only, and run on your own Claude account.');
+    head.appendChild(note);
+    panel.appendChild(head);
+
+    var log = askEl('div', 'ask-log');
+    panel.appendChild(log);
+
+    var form = document.createElement('form');
+    form.className = 'ask-form';
+    var box = document.createElement('textarea');
+    box.className = 'ask-box';
+    box.rows = 2;
+    box.placeholder = 'Ask about anything on this page…';
+    var send = askEl('button', 'eb-btn eb-primary', 'Ask');
+    send.type = 'submit';
+    var stop = askEl('button', 'eb-btn', 'Stop');
+    stop.type = 'button';
+    stop.hidden = true;
+    form.appendChild(box);
+    form.appendChild(send);
+    form.appendChild(stop);
+    panel.appendChild(form);
+
+    form.addEventListener('submit', function (ev) {
+      if (ev && ev.preventDefault) { ev.preventDefault(); }
+      sendAsk();
+    });
+    box.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' && !ev.shiftKey) {
+        if (ev.preventDefault) { ev.preventDefault(); }
+        sendAsk();
+      }
+    });
+    stop.addEventListener('click', function () { if (askCtl) { askCtl.abort(); } });
+
+    document.body.appendChild(panel);
+    askEls = { panel: panel, log: log, box: box, send: send, stop: stop };
+    return askEls;
+  }
+
+  function askBubble(who, text) {
+    var e = buildAsk();
+    var b = askEl('div', 'ask-turn ask-' + who);
+    b.appendChild(askEl('p', null, text));
+    e.log.appendChild(b);
+    e.log.scrollTop = e.log.scrollHeight;
+    return b.querySelector('p');
+  }
+
+  function askBusy(on) {
+    var e = buildAsk();
+    asking = on;
+    e.send.disabled = on;
+    e.box.disabled = on;
+    e.stop.hidden = !on;
+  }
+
+  function openAsk() {
+    var e = buildAsk();
+    askOpen = true;
+    e.panel.hidden = false;
+    document.body.setAttribute('data-asking', 'true');
+    render();
+    try { e.box.focus(); } catch (err) { /* focus is a nicety */ }
+  }
+
+  function closeAsk() {
+    askOpen = false;
+    if (askEls) { askEls.panel.hidden = true; }
+    document.body.setAttribute('data-asking', 'false');
+    render();
+  }
+
+  /** Permanently withdraw the feature for this view. */
+  function killAsk() {
+    askReady = false;
+    askOpen = false;
+    if (askEls && askEls.panel.parentNode) { askEls.panel.parentNode.removeChild(askEls.panel); }
+    askEls = null;
+    document.body.setAttribute('data-asking', 'false');
+    render();
+  }
+
+  function sendAsk() {
+    if (asking || !askNS) { return; }
+    var e = buildAsk();
+    var q = (e.box.value || '').trim();
+    if (!q) { return; }
+    e.box.value = '';
+    askBubble('you', q);
+    var out = askBubble('claude', 'Thinking…');
+
+    askTurns.push({ role: 'user', content: q });
+    // The instructions turn is rebuilt each time so it carries the CURRENT
+    // text: the reader may have edited the page since the last question.
+    var input = [{ role: 'user', content: askRules() }].concat(askTurns);
+
+    askCtl = new AbortController();   // a NEW controller per call, never reused
+    askBusy(true);
+    askNS(input, {
+      cache: false,                   // every turn of a chat must really ask
+      signal: askCtl.signal,
+      onText: function (u) { out.textContent = u.text; }
+    }).then(function (r) {
+      askTurns.push({ role: 'assistant', content: r.text });
+      out.textContent = r.text;
+      if (r.truncated) { askBubble('note', 'That answer was cut short — ask for less at a time.'); }
+      askBusy(false);
+    })['catch'](function (err) {
+      var code = (err && err.code) || 'upstream_error';
+      askBusy(false);
+      // Drop the question that failed, so the next call is not sent twice.
+      askTurns.pop();
+      if (code === 'cancelled') {
+        out.textContent = (err && err.text) || 'Stopped.';
+        return;
+      }
+      var c = askError(code);
+      if (c.hide) { killAsk(); return; }
+      if (err && err.text && !c.clear) { out.textContent = err.text; }
+      else if (out.parentNode) { out.parentNode.removeChild(out.parentNode); }
+      askBubble('note', c.msg);
+    });
+  }
+
+  /** Reveal the feature only once the viewer's runtime has answered. It
+   *  resolves later than boot and unordered with DOMContentLoaded, and null
+   *  where this view can never sample — so the bar renders without it first. */
+  function initAsk() {
+    if (!window.claude || typeof window.claude.use !== 'function') { return; }
+    try {
+      window.claude.use('sample').then(function (ns) {
+        if (typeof ns !== 'function') { return; }
+        askNS = ns;
+        askReady = true;
+        render();
+      }, function () { /* absent is a normal outcome, not an error to show */ });
+    } catch (e) { /* the page reads fine without it */ }
+  }
+
+  /* ---- the shelf description ------------------------------------------
+     One or two sentences for this page's card on the Artifact Shelf, written
+     by the author. It lives in the page itself, in a JSON block that rebuild()
+     carries into every saved version, because a page cannot write the shelf's
+     own database: the shelf picks it up when it next syncs this page. The
+     drawer reuses the ask drawer's styles and, like it, is appended to <body>
+     at runtime, so the drawer never enters a saved version — only the text does. */
+  var shelfDesc = readShelfMeta(), shelfOpen = false, shelfEls = null;
+
+  function readShelfMeta() {
+    var el = $('#shelf-meta');
+    if (!el) { return ''; }
+    try {
+      var d = JSON.parse(el.textContent || '{}');
+      return (d && typeof d.desc === 'string') ? d.desc : '';
+    } catch (e) { return ''; }
+  }
+
+  /** The block rebuild() emits: nothing at all while there is no description,
+   *  so a page that never had one saves byte-for-byte as before. */
+  function shelfMetaBlock() {
+    if (!shelfDesc) { return ''; }
+    return '<script type="application/json" id="shelf-meta">\n' +
+      JSON.stringify({ desc: shelfDesc }).replace(/</g, '\\u003c') + '\n<\/script>\n';
+  }
+
+  function buildShelf() {
+    if (shelfEls) { return shelfEls; }
+    var panel = askEl('div', 'ask-panel');
+    panel.id = 'editor-shelf';
+    panel.setAttribute('aria-label', 'Shelf description');
+    var head = askEl('div', 'ask-head');
+    head.appendChild(askEl('span', 'ask-title', 'Shelf description'));
+    head.appendChild(askEl('span', 'ask-note',
+      'One or two sentences for this page\'s card on the Artifact Shelf. Saving publishes a new version of this page.'));
+    panel.appendChild(head);
+    var form = document.createElement('form');
+    form.className = 'ask-form';
+    var box = document.createElement('textarea');
+    box.className = 'ask-box';
+    box.rows = 3;
+    box.maxLength = 400;
+    box.placeholder = 'What this page shows, in a sentence a reader scanning the shelf can tell apart from the rest…';
+    var save = askEl('button', 'eb-btn eb-primary', 'Save');
+    save.type = 'submit';
+    var cancel = askEl('button', 'eb-btn', 'Cancel');
+    cancel.type = 'button';
+    form.appendChild(box);
+    form.appendChild(save);
+    form.appendChild(cancel);
+    panel.appendChild(form);
+    form.addEventListener('submit', function (ev) {
+      if (ev && ev.preventDefault) { ev.preventDefault(); }
+      saveShelf();
+    });
+    cancel.addEventListener('click', function () { closeShelf(); });
+    document.body.appendChild(panel);
+    shelfEls = { panel: panel, box: box, save: save, cancel: cancel };
+    return shelfEls;
+  }
+
+  function openShelf() {
+    var e = buildShelf();
+    e.box.value = shelfDesc;             // always start from the saved text
+    shelfOpen = true;
+    e.panel.hidden = false;
+    render();
+    try { e.box.focus(); } catch (err) { /* focus is a nicety */ }
+  }
+
+  function closeShelf() {
+    shelfOpen = false;
+    if (shelfEls) { shelfEls.panel.hidden = true; }
+    render();
+  }
+
+  function saveShelf() {
+    if (saving) { return; }
+    var e = buildShelf();
+    var next = String(e.box.value || '').replace(/\s+/g, ' ').trim();
+    if (next === shelfDesc) { closeShelf(); return; }
+    var prev = shelfDesc;
+    saving = true;
+    e.save.disabled = true; e.cancel.disabled = true; e.box.disabled = true;
+    e.save.textContent = 'Saving…';
+    render();
+    shelfDesc = next;                     // rebuild() reads it
+    artifactNS().then(function (ns) {
+      if (!ns) { throw { code: 'not_writer' }; }
+      return ns.publish(rebuild());
+    }).then(function () {
+      saving = false;
+      e.save.textContent = 'Save'; e.save.disabled = false; e.cancel.disabled = false; e.box.disabled = false;
+      closeShelf();
+      toast(next ? 'Shelf description saved. The shelf shows it after its next sync.'
+                 : 'Shelf description removed.');
+    })['catch'](function (err) {
+      shelfDesc = prev;                   // the page's record is unchanged
+      saving = false;
+      e.save.textContent = 'Save'; e.save.disabled = false; e.cancel.disabled = false; e.box.disabled = false;
+      render();
+      var code = (err && err.code) || 'unknown';
+      toast(code === 'not_writer'
+        ? 'This view is read-only — only the author can set the shelf description. Your text is still in the box.'
+        : code === 'conflict'
+          ? 'A newer version was published first. Reload, then save the description again — your text is still in the box.'
+          : 'Saving the description failed (' + code + '). Your text is still in the box.');
+    });
+  }
+
+  function boot() { render(); offerDraft(); initAsk(); }
+  if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', boot); }
+  else { boot(); }
+})();
+</script>
+<script id="chart-script">
+(function () {
+  'use strict';
+  /* Launchpad palette indices used by the daemon -> screen colors (close, not exact). */
+  var PAL = { 1: '#6b6f75', 2: '#a3a7ad', 3: '#ffffff', 5: '#ff3b30', 6: '#b3261e', 7: '#7a1a14', 9: '#ff9f0a',
+    13: '#ffd60a', 21: '#2fd158', 33: '#5ee6c8', 37: '#22d3ee', 40: '#6ea8ff', 41: '#3f6fd8', 45: '#3b82f6',
+    53: '#a855f7', 57: '#ff5fa2', 58: '#c0265f' };
+  var DARK_LABEL = { 3: 1, 13: 1, 9: 1, 21: 1, 37: 1, 33: 1, 2: 1 };
+  var TOP = { 91: '↑', 92: '↓', 93: '←', 94: '→', 95: 'Session', 96: 'Drums', 97: 'Keys', 98: 'User' };
+  var MODES = [['default', 'Default'], ['session', 'Session'], ['drums', 'Drums'], ['keys', 'Keys'], ['user', 'User']];
+  var MODE_CC = { session: 95, drums: 96, keys: 97, user: 98 };
+  var MODE_ON = { session: 3, drums: 9, keys: 21, user: 3 };
+  var DRUMS = { 11: ['kick-punch', 5], 12: ['kick-sub', 7], 13: ['kick-hard', 6], 14: ['snare', 13], 15: ['clap', 9],
+    16: ['hat-closed', 37], 17: ['hat-open', 33], 18: ['crash', 3], 21: ['sub-drop', 45], 22: ['tom-low', 41],
+    23: ['tom-high', 40], 24: ['shaker', 21], 25: ['pluck', 53], 26: ['snap', 57], 27: ['ride', 2], 28: ['reverse-cymbal', 58] };
+  var NUMPAD = { 41: 7, 42: 8, 43: 9, 31: 4, 32: 5, 33: 6, 21: 1, 22: 2, 23: 3, 11: 0, 12: 0, 13: 0 };
+  var CLAUDE_SKILLS = ['constellupdates', 'coremap', 'padspace', 'linear-issue'];
+  var HERMES_SKILLS = ['research', 'productivity', 'note-taking', 'devops'];
+  /* example workspace state for the Default view: [color, flash color or null] */
+  var EXAMPLE = { 83: [3, null], 81: [1, null], 82: [5, null], 71: [1, 21], 84: [45, null], 72: [1, null],
+    86: [3, null], 85: [1, null], 88: [1, 5], 76: [21, null], 77: [1, null] };
+  var EXAMPLE_NOTE = { 83: 'white: current desktop on this display', 82: 'red: a VS Code window is here',
+    84: 'blue: Slack is here', 76: 'green: the Notion work log is the active tab here',
+    71: 'flashing green: a Claude session here finished its turn', 88: 'flashing red: a Claude session here is waiting on you' };
+  var mode = 'default', sel = null, host = null;
+
+  function grid(note) { return note >= 71 && note <= 88 && note % 10 >= 1 && note % 10 <= 8; }
+  function wsInfo(note) {
+    var row = Math.floor(note / 10), col = note % 10, scr = col <= 4 ? 0 : 1;
+    var desk = (col - (scr ? 4 : 0)) + (row === 7 ? 4 : 0);
+    return { scr: scr, desk: desk };
+  }
+
+  /* -> {color, flash, breathe, label, title, what} for one button in the current mode */
+  function describe(id) {
+    var d = { color: 0, label: '', title: '', what: '' };
+    if (id === 'logo') { d.title = 'Novation logo'; d.what = 'Not a button.'; return d; }
+    if (id.charAt(0) === 'c') {
+      var cc = +id.slice(2);
+      if (TOP[cc]) {
+        d.label = TOP[cc];
+        if (cc <= 94) { d.color = 1; d.title = 'Arrow key ' + TOP[cc]; d.what = 'Sends a real arrow key to the focused window. Works in every mode.'; return d; }
+        var m = { 95: 'session', 96: 'drums', 97: 'keys', 98: 'user' }[cc];
+        d.color = mode === m ? MODE_ON[m] : 1;
+        d.title = TOP[cc] + ' mode (toggle)';
+        d.what = { session: 'Bottom two rows show running Claude Code sessions: this machine below, Polaris above.',
+          drums: 'Bottom two rows play the 16-pad drum kit.', keys: 'Bottom-left 3×4 block becomes a numpad.',
+          user: 'Bottom two rows launch Claude Code and Hermes skills.' }[m] + (mode === m ? ' On now.' : ' Off now; turning it on turns the other modes off.');
+        return d;
+      }
+      d.title = 'Round button cc' + cc; d.what = 'Free. Bind a shell command to it in bindings.conf (e.g. "cc' + cc + ' = konsole").';
+      return d;
+    }
+    var note = +id.slice(1);
+    if (grid(note)) {
+      var w = wsInfo(note);
+      d.label = String(w.desk);
+      d.title = (w.scr ? 'Screen 1 (eDP-1, laptop)' : 'Screen 0 (HDMI-A-1, ultrawide)') + ', desktop ' + w.desk;
+      d.what = 'Tap: switch to it. Hold 0.55 s: also move the window you were using there.';
+      if (EXAMPLE[note]) {
+        d.color = EXAMPLE[note][0]; d.flash = EXAMPLE[note][1];
+        if (EXAMPLE_NOTE[note]) { d.what += ' Example light: ' + EXAMPLE_NOTE[note] + '.'; }
+      }
+      return d;
+    }
+    if (mode === 'drums' && DRUMS[note]) { d.color = DRUMS[note][1]; d.label = DRUMS[note][0].replace('-', '\n'); d.title = 'Drum: ' + DRUMS[note][0]; d.what = 'Plays the ' + DRUMS[note][0] + ' sample.'; return d; }
+    if (mode === 'keys' && NUMPAD[note] != null) {
+      var n = NUMPAD[note]; d.color = 21; d.label = String(n); d.breathe = n ? n : 0;
+      d.title = 'Digit ' + n; d.what = 'Types ' + n + '.' + (n ? ' Breathes green once every ' + n + ' s.' : ' The three bottom pads are one wide 0, lit steadily.');
+      return d;
+    }
+    if (mode === 'user' && note >= 11 && note <= 28) {
+      var row = note <= 18 ? 0 : 1, i = note - (row ? 21 : 11), list = row ? HERMES_SKILLS : CLAUDE_SKILLS;
+      if (list[i]) { d.color = row ? 45 : 9; d.label = list[i].slice(0, 6); d.title = (row ? 'Hermes skill: ' : 'Claude Code skill: ') + list[i]; d.what = 'Opens a Konsole running ' + (row ? 'hermes --skills ' + list[i] + ' chat.' : 'claude "/' + list[i] + '".'); }
+      else { d.title = (row ? 'Hermes' : 'Claude Code') + ' slot ' + (i + 1); d.what = 'Empty slot. Add an entry to ~/.ctrl/' + (row ? 'hermes' : 'claude') + '/ to fill it.'; }
+      return d;
+    }
+    if (mode === 'session' && note >= 11 && note <= 28) {
+      var polaris = note >= 21;
+      d.title = (polaris ? 'Polaris' : 'Local') + ' session slot ' + (note - (polaris ? 20 : 10));
+      d.what = 'Lights for one running Claude Code session ' + (polaris ? 'of yours on Polaris' : 'on this machine') + ': green if the last tool result had no error, red if it did. Press to focus its window, or resume it in a new Konsole.';
+      var demo = { 11: 21, 12: 21, 13: 5, 21: 21, 22: 1 }[note];
+      if (demo) { d.color = demo; d.what += ' (Lit here as an example.)'; }
+      return d;
+    }
+    d.title = 'Pad ' + note;
+    d.what = (note <= 28 ? 'Used by Session, Drums, Keys or User when one is on. ' : note <= 43 && note % 10 <= 3 ? 'Part of the Keys numpad when Keys is on. ' : '') + 'Otherwise free: bind a shell command in bindings.conf (e.g. "' + note + ' = konsole").';
+    return d;
+  }
+
+  function ids() {
+    var out = [];
+    for (var c = 91; c <= 98; c++) { out.push('cc' + c); }
+    out.push('logo');
+    for (var r = 8; r >= 1; r--) {
+      for (var k = 1; k <= 8; k++) { out.push('n' + (10 * r + k)); }
+      out.push('cc' + (10 * r + 9));
+    }
+    return out;
+  }
+
+  function idLabel(id) { return id === 'logo' ? '' : id.charAt(0) === 'c' ? id : 'note ' + id.slice(1); }
+
+  function render() {
+    host = document.getElementById('padmap');
+    if (!host) { return; }
+    var h = '<div class="modes" role="group" aria-label="Mode">';
+    MODES.forEach(function (m) { h += '<button type="button" class="mode-btn" data-mode="' + m[0] + '" aria-pressed="' + (mode === m[0]) + '">' + m[1] + '</button>'; });
+    h += '</div><div class="device"><div class="lp">';
+    ids().forEach(function (id) {
+      var d = describe(id), round = id.charAt(0) === 'c' || id === 'logo', st = '', cls = 'lp-btn' + (round ? ' round' : '') + (id === 'logo' ? ' logo' : '');
+      if (d.color) {
+        st += '--led:' + PAL[d.color] + ';';
+        if (DARK_LABEL[d.color]) { st += '--lab:rgba(0,0,0,.72);'; } else { st += '--lab:rgba(255,255,255,.9);'; }
+      }
+      if (d.flash) { cls += ' flash'; st += '--led-b:' + PAL[d.flash] + ';'; }
+      if (d.breathe) { cls += ' breathe'; st += '--period:' + d.breathe + 's;'; }
+      if (sel === id) { cls += ' sel'; }
+      h += '<button type="button" class="' + cls + '" data-id="' + id + '"' + (d.color ? ' data-lit' : '') + (st ? ' style="' + st + '"' : '') +
+        ' aria-label="' + (d.title || idLabel(id)).replace(/"/g, '&quot;') + '"' + (id === 'logo' ? ' tabindex="-1" aria-hidden="true"' : '') + '>' +
+        (d.label ? d.label.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>') : '') + '</button>';
+    });
+    h += '</div></div><div class="detail" aria-live="polite"></div>';
+    host.innerHTML = h;
+    Array.prototype.forEach.call(host.querySelectorAll('.mode-btn'), function (b) {
+      b.addEventListener('click', function () { mode = b.getAttribute('data-mode'); render(); show(sel); });
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('.lp-btn'), function (b) {
+      var id = b.getAttribute('data-id');
+      if (id === 'logo') { return; }
+      b.addEventListener('mouseenter', function () { show(id); });
+      b.addEventListener('focus', function () { show(id); });
+      b.addEventListener('click', function () { sel = id; render(); show(id); var nb = host.querySelector('[data-id="' + id + '"]'); if (nb) { nb.focus(); } });
+    });
+    show(sel);
+  }
+
+  function show(id) {
+    var box = host && host.querySelector('.detail');
+    if (!box) { return; }
+    if (!id) { box.innerHTML = '<span style="color:var(--ink-3)">Tap or hover any pad.</span>'; return; }
+    var d = describe(id);
+    box.innerHTML = '<b>' + d.title.replace(/</g, '&lt;') + '</b><span class="id">' + idLabel(id) + '</span><br>' + d.what.replace(/</g, '&lt;');
+  }
+
+  function boot() { render(); }
+  if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', boot); } else { boot(); }
+})();
+</script>
+<script id="dw-script">
+/* AI disclosure panel — standalone kit, v3 (2026-09-21).
+   Lifted from Mehdi Azabou's report skeleton (templates/distill/skeleton.html) so that a panel on any
+   page looks and behaves exactly like the one beside his reports. Do not edit: the point is that every
+   panel is the same. It renders #disclosure-widget from the JSON in <script id="disclosure">; when the
+   viewer can write the artifact, the dots and blocks become clickable and "Save rating" publishes a new
+   version of the page with the rating stored in that JSON block. It opens collapsed to two lines — the
+   head, and one line on how human the page is — and remembers the reader's choice in localStorage; that
+   choice is per reader and never reaches the JSON or a saved version. */
+(function () {
+  'use strict';
+  function q(s, r) { return (r || document).querySelector(s); }
+  function qa(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); }
+  function escD(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function fmtN(n) { return (n == null || isNaN(n)) ? '—' : Number(n).toLocaleString('en-US'); }
+
+  var AXES = [['framing', 'Framing', 'thesis and structure'], ['evidence', 'Evidence', 'who found and chose the sources'], ['analysis', 'Analysis', 'whose synthesis and judgement'], ['drafting', 'Drafting', 'who wrote the words']];
+  var LEAD = ['human', 'human, AI sharpened', 'AI proposed, human shaped', 'AI'];
+  var TRUST = ['not reviewed', 'read, plausible', 'key points checked', 'verified, would cite'];
+  var ICO = {
+    sparkles: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2 2.2.8-2.2.8L19 21l-.8-2.2-2.2-.8 2.2-.8z"/></svg>',
+    user: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="4"/><path d="M6 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/></svg>',
+    robot: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V5M9 5h6M9 17h6"/><circle cx="9" cy="13" r="1" fill="currentColor"/><circle cx="15" cy="13" r="1" fill="currentColor"/></svg>',
+    eyecheck: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M11 19.6C6.8 19.2 4 16.5 2 12c2-4.7 5.5-7 10-7s8 2.3 10 7c-.3.7-.7 1.4-1.1 2"/><path d="M15 19l2 2 4-4"/></svg>',
+    usercheck: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="7" r="4"/><path d="M3 21v-2a4 4 0 0 1 4-4h4"/><path d="M15 19l2 2 4-4"/></svg>',
+    chev: '<svg class="ico dw-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>'
+  };
+  var DISC = null, dirty = false, ns = null, saving = false, toastEl = null, toastTimer = null, open = false;
+
+  /* ---- collapsed by default; the reader's choice is theirs alone (never saved into the page) ---- */
+  var OPEN_KEY = 'dw-open';
+  function readOpen() { try { return localStorage.getItem(OPEN_KEY) === '1'; } catch (e) { return false; } }
+  function writeOpen(v) { try { localStorage.setItem(OPEN_KEY, v ? '1' : '0'); } catch (e) { /* private window, blocked storage */ } }
+
+  /* ---- data ---- */
+  function data() {
+    if (DISC) { return DISC; }
+    var el = q('#disclosure'); if (!el) { return null; }
+    try { DISC = JSON.parse(el.textContent); } catch (e) { DISC = null; }
+    if (DISC) { DISC.agent = DISC.agent || {}; DISC.agent.axes = DISC.agent.axes || {}; DISC.human = DISC.human || {}; DISC.human.trust = DISC.human.trust || {}; DISC.human.lead = DISC.human.lead || {}; DISC.metrics = DISC.metrics || {}; }
+    return DISC;
+  }
+  function wordList(text) { return text.match(/[\p{L}\p{N}][\p{L}\p{N}'’\-]*/gu) || []; }
+  function countedRoot() { return q('[data-words]') || q('main') || q('article') || document.body; }
+  function countWords() {
+    var c = countedRoot().cloneNode(true);
+    qa('#disclosure-widget, script, style, title, .dw-toast', c).forEach(function (e) { e.parentNode.removeChild(e); });
+    return wordList(c.textContent || '').length;
+  }
+
+  /* ---- derivation (identical to the skeleton) ---- */
+  function agentLead(d, axis) { var ax = d.agent.axes[axis] || {}; return Math.max(0, Math.min(3, ax.lead || 0)); }
+  function effLead(d, axis) { var o = d.human.lead[axis]; return (o == null) ? agentLead(d, axis) : Math.max(0, Math.min(3, o)); }
+  function discStatus(d) {
+    var r = AXES.map(function (a) { return d.human.trust[a[0]] || 0; }), lo = Math.min.apply(null, r), hi = Math.max.apply(null, r);
+    if (hi === 0) { return { cls: 'unrated', label: 'Not yet rated' }; }
+    if (lo >= 3) { return { cls: 'verified', label: 'Verified' }; }
+    if (lo >= 2) { return { cls: 'checked', label: 'Checked' }; }
+    return { cls: 'partial', label: 'Partly checked' };
+  }
+  function discSentence(d) {
+    if (d.human.note) { return d.human.note; }
+    var who = d.human.name || 'The author', human = [], ai = [];
+    AXES.forEach(function (a) { (effLead(d, a[0]) <= 1 ? human : ai).push(a[1].toLowerCase()); });
+    var s = '';
+    if (human.length) { s += 'Human-led ' + human.join(' and '); }
+    if (ai.length) { s += (s ? '; ' : '') + 'AI-led ' + ai.join(', '); }
+    s += '. ';
+    var st = discStatus(d);
+    if (st.cls === 'unrated') { s += who + ' has not rated it yet: treat it as a draft.'; }
+    else if (st.cls === 'verified') { s += who + ' verified every axis.'; }
+    else { var low = AXES.filter(function (a) { return (d.human.trust[a[0]] || 0) <= 1; }).map(function (a) { return a[1].toLowerCase(); }); s += low.length ? who + ' checked the rest; ' + low.join(' and ') + ' not yet.' : who + ' checked the key points on every axis.'; }
+    return s;
+  }
+  /* how human is this page: the mean of (3 - lead)/3 across the four axes, as a percentage */
+  function humanPct(d) { var t = 0; AXES.forEach(function (a) { t += (3 - effLead(d, a[0])) / 3; }); return Math.round(100 * t / AXES.length); }
+  function humanSummary(d) {
+    var human = [], ai = [];
+    AXES.forEach(function (a) { (effLead(d, a[0]) <= 1 ? human : ai).push(a[1].toLowerCase()); });
+    var led = human.length === 4 ? 'human throughout' : human.length ? 'human on ' + human.join(' and ') : 'AI on all four axes';
+    var st = discStatus(d), first = (d.human.name || 'the author').split(' ')[0];
+    return { pct: humanPct(d), text: led + ' · ' + (st.cls === 'unrated' ? 'not yet rated' : st.label.toLowerCase() + ' by ' + first) };
+  }
+  function metricTiles(d, words) {
+    var sessions = d.agent.sessions || [], turns = sessions.reduce(function (n, s) { return n + (s.turns || 0); }, 0), turnsKnown = sessions.every(function (s) { return s.turns != null; });
+    var saves = d.metrics.saves || 0, hw = d.metrics.humanWordsTouched || 0, hwPct = words ? 100 * hw / words : 0, ver = d.agent.versions || 1, aiPct = d.agent.aiWordsTouchedLastPct;
+    var first = (d.human.name || 'the author').split(' ')[0];
+    return [
+      { v: fmtN(words), l: 'words' },
+      { v: fmtN(sessions.length), l: 'sessions' },
+      turns ? { v: (turnsKnown ? '' : '≥ ') + fmtN(turns), l: 'user turns' } : null,
+      { v: fmtN(ver), l: 'versions' },
+      { v: fmtN(saves), l: 'saves by ' + first },
+      { v: fmtN(hw) + (hw ? ' <small>' + hwPct.toFixed(hwPct < 1 ? 1 : 0) + '%</small>' : ''), l: 'words ' + first + ' edited' },
+      (d.agent.aiWordsTouchedLast != null && ver > 1) ? { v: fmtN(d.agent.aiWordsTouchedLast) + (aiPct != null ? ' <small>' + aiPct + '%</small>' : ''), l: 'words changed, last version' } : null
+    ].filter(Boolean);
+  }
+
+  /* ---- placement: a fixed rail right of the page from 1520px, unless the content is too wide for it ---- */
+  function place() {
+    var host = q('#disclosure-widget'); if (!host) { return; }
+    var inline = host.hasAttribute('data-inline');
+    if (!inline && window.innerWidth >= 1520) {
+      var m = q('[data-words]') || q('main') || q('article');
+      if (m && m !== host && !m.contains(host)) { inline = m.getBoundingClientRect().right > window.innerWidth / 2 + 556; }
+      else if (m && m.contains(host)) { var was = host.classList.contains('dw-inline'); host.classList.add('dw-inline'); inline = m.getBoundingClientRect().right > window.innerWidth / 2 + 556; if (!was) { host.classList.remove('dw-inline'); } }
+    }
+    host.classList.toggle('dw-inline', inline);
+  }
+
+  /* ---- render (identical markup to the skeleton) ---- */
+  function render() {
+    var host = q('#disclosure-widget'); if (!host) { return; }
+    host.classList.add('disclosure');
+    var d = data(); if (!d) { host.hidden = true; return; }
+    host.hidden = false;
+    var canRate = !!ns;
+    var st = discStatus(d), who = d.human.name || 'the author', first = who.split(' ')[0];
+    var words = countWords(), sessions = d.agent.sessions || [], tiles = metricTiles(d, words);
+    var sum = humanSummary(d);
+    var h = '<div class="dw' + (canRate ? ' can-rate' : '') + (sum.pct >= 75 ? ' dw-human' : '') + (open ? '' : ' dw-collapsed') + '">';
+    h += '<button type="button" class="dw-summary" aria-expanded="' + (open ? 'true' : 'false') + '" aria-controls="dw-body">';
+    h += '<span class="dw-head"><span class="dw-title">' + ICO.sparkles + 'AI disclosure</span><span class="dw-pill ' + st.cls + '">' + ICO.eyecheck + st.label + '</span>' + ICO.chev + '</span>';
+    h += '<span class="dw-sum"><span class="dw-hbar" aria-hidden="true">' + AXES.map(function (a) { return '<i class="' + (effLead(d, a[0]) <= 1 ? 'h' : 'a') + '"></i>'; }).join('') + '</span>';
+    h += '<span class="txt"><b>' + sum.pct + '% human</b> · ' + escD(sum.text) + '</span></span></button>';
+    h += '<div class="dw-body" id="dw-body">';
+    h += '<p class="dw-read">' + escD(discSentence(d)) + '</p>';
+    h += '<div class="dw-axes">';
+    AXES.forEach(function (a) {
+      var ax = d.agent.axes[a[0]] || {}, al = agentLead(d, a[0]), lead = effLead(d, a[0]), over = d.human.lead[a[0]] != null && lead !== al, tr = d.human.trust[a[0]] || 0;
+      h += '<div class="dw-axis" data-axis="' + a[0] + '"><div class="dw-axis-head"><span class="lbl" title="' + escD(a[2]) + '">' + a[1] + '</span><span class="lead-txt">' + LEAD[lead] + '</span></div>';
+      h += '<div class="dw-scale"><span>' + ICO.user + 'Human</span><span>AI ' + ICO.robot + '</span></div>';
+      h += '<div class="seg" role="group" aria-label="' + a[1] + ': ' + LEAD[lead] + (canRate ? '. Click a block to move it.' : '') + '">';
+      for (var i = 0; i < 4; i++) {
+        var cls = (i === lead ? 'on' + (lead <= 1 ? ' h' : '') : '') + (over && i === al ? ' was' + (al <= 1 ? ' h' : '') : '');
+        h += canRate ? '<button type="button" class="' + cls.trim() + '" data-lead="' + i + '" title="' + LEAD[i] + '" aria-label="' + LEAD[i] + '" aria-pressed="' + (i === lead) + '"></button>' : '<span class="' + cls.trim() + '"></span>';
+      }
+      h += '</div>';
+      if (ax.note) { h += '<p class="dw-note">' + escD(ax.note) + '</p>'; }
+      if (over) { h += '<p class="dw-note ov">' + escD(first) + ' moved this from “' + LEAD[al] + '” to “' + LEAD[lead] + '”.</p>'; }
+      h += '<div class="dw-trust"><span class="dots" role="group" aria-label="' + escD(first) + '’s trust in ' + a[1].toLowerCase() + '">';
+      for (var j = 0; j < 4; j++) { h += '<button type="button" class="' + (j > 0 && j < tr ? 'on' : '') + (j === tr && tr > 0 ? ' cur' : '') + '" data-level="' + j + '" title="' + TRUST[j] + '" aria-label="' + TRUST[j] + '" aria-pressed="' + (j === tr) + '"' + (canRate ? '' : ' tabindex="-1"') + '>' + j + '</button>'; }
+      h += '</span><span>' + escD(first) + ': ' + TRUST[tr] + '</span></div></div>';
+    });
+    h += '</div>';
+    h += '<div class="dw-metrics">' + tiles.map(function (t) { return '<div class="dw-metric"><b>' + t.v + '</b><span>' + escD(t.l) + '</span></div>'; }).join('') + '</div>';
+    h += '<details><summary>What the AI did</summary>';
+    if (d.agent.evidence) { h += '<p class="dw-note">' + escD(d.agent.evidence) + '</p>'; }
+    [['What came from ' + first, d.agent.fromHuman], ['AI synthesis, not something ' + first + ' said', d.agent.synthesis], ['Claims without a source', d.agent.unsourced], ['Flagged as uncertain', d.agent.uncertain]].forEach(function (L) {
+      if (L[1] && L[1].length) { h += '<p class="dw-note"><b>' + escD(L[0]) + '</b></p><ul>' + L[1].map(function (x) { return '<li>' + escD(x) + '</li>'; }).join('') + '</ul>'; }
+    });
+    if (sessions.length) { h += '<p class="dw-note"><b>Sessions</b></p><ul>' + sessions.map(function (s) { return '<li>' + escD(s.date) + (s.model ? ' · ' + escD(s.model) : '') + (s.turns != null ? ' · ' + s.turns + (s.turns === 1 ? ' turn' : ' turns') : '') + (s.what ? ': ' + escD(s.what) : '') + '</li>'; }).join('') + '</ul>'; }
+    h += '</details>';
+    if (canRate) { h += '<div class="dw-save"' + (dirty ? '' : ' hidden') + '><button type="button" class="d-btn primary dw-save-btn">' + (saving ? 'Saving…' : 'Save rating') + '</button><button type="button" class="d-btn dw-note-btn">Read-this-as note</button></div><textarea class="dw-note-input" hidden placeholder="Optional: one sentence a reader should keep in mind (replaces the derived one)">' + escD(d.human.note || '') + '</textarea>'; }
+    h += '<div class="dw-foot"><span>' + escD(d.agent.model || 'Claude') + (sessions.length ? ' · ' + escD(sessions[0].date) + (sessions.length > 1 ? ' → ' + escD(sessions[sessions.length - 1].date) : '') : '') + '</span><span>' + ICO.usercheck + 'Accountable: ' + escD(who) + (d.human.decision ? ' · ' + escD(d.human.decision) : '') + (d.human.ratedOn ? ' · rated ' + escD(d.human.ratedOn) : '') + '</span></div>';
+    h += '</div></div>';
+    host.innerHTML = h;
+    place();
+    q('.dw-summary', host).addEventListener('click', function () { open = !open; writeOpen(open); render(); var b = q('.dw-summary', host); if (b) { b.focus(); } });
+    if (!canRate) { return; }
+    function touched() { d.human.ratedOn = new Date().toISOString().slice(0, 10); dirty = true; render(); }
+    qa('.dots button', host).forEach(function (b) {
+      b.addEventListener('click', function () { d.human.trust[b.closest('.dw-axis').getAttribute('data-axis')] = +b.getAttribute('data-level'); touched(); });
+    });
+    qa('.seg button', host).forEach(function (b) {
+      b.addEventListener('click', function () {
+        var axis = b.closest('.dw-axis').getAttribute('data-axis'), i = +b.getAttribute('data-lead');
+        if (i === agentLead(d, axis)) { delete d.human.lead[axis]; } else { d.human.lead[axis] = i; }
+        touched();
+      });
+    });
+    var saveBtn = q('.dw-save-btn', host), noteBtn = q('.dw-note-btn', host), ta = q('.dw-note-input', host), row = q('.dw-save', host);
+    saveBtn.disabled = saving;
+    saveBtn.addEventListener('click', function () { if (ta && !ta.hidden) { d.human.note = ta.value.trim(); } save(); });
+    noteBtn.addEventListener('click', function () { ta.hidden = !ta.hidden; row.hidden = false; if (!ta.hidden) { ta.focus(); } });
+    ta.addEventListener('input', function () { dirty = true; row.hidden = false; });
+  }
+
+  /* ---- saving: rebuild the whole page from what the platform served, with the new JSON, and publish it ---- */
+  var CDN = /^https:\/\/(cdnjs\.cloudflare\.com|cdn\.jsdelivr\.net|cdn\.tailwindcss\.com|code\.jquery\.com)\//;
+  function rebuildDocument() {
+    var d = data(), json = JSON.stringify(d).replace(/</g, '\\u003c');
+    var seen = {}, head = '';
+    qa('head > meta, head > style, head > link, head > title').forEach(function (el) { var s = el.outerHTML; if (!seen[s]) { seen[s] = 1; head += s + '\n'; } });
+    if (!/<meta[^>]+charset/i.test(head)) { head = '<meta charset="utf-8">\n' + head; }
+    var parts = [];
+    Array.prototype.forEach.call(document.body.childNodes, function (n) {
+      if (n.nodeType === 3) { parts.push(n.data); return; }
+      if (n.nodeType === 8) { parts.push('<!--' + n.data + '-->'); return; }
+      if (n.nodeType !== 1) { return; }
+      if (n.tagName === 'SCRIPT' && n.getAttribute('src') && !CDN.test(n.src)) { return; }   /* the platform's runtime, not part of the page */
+      if (n.classList.contains('dw-toast')) { return; }
+      var c = n.cloneNode(true);
+      if (c.tagName === 'SCRIPT' && c.id === 'disclosure') { c.textContent = json; }
+      else {
+        qa('script#disclosure', c).forEach(function (e) { e.textContent = json; });
+        var w = (c.id === 'disclosure-widget') ? c : q('#disclosure-widget', c);
+        if (w) { w.innerHTML = ''; w.classList.remove('dw-inline'); w.removeAttribute('hidden'); }
+        qa('[data-generated], .fig-canvas', c).forEach(function (e) { e.innerHTML = ''; });
+      }
+      parts.push(c.outerHTML);
+    });
+    var lang = document.documentElement.getAttribute('lang');
+    return '<!doctype html>\n<html' + (lang ? ' lang="' + escD(lang) + '"' : '') + '>\n<head>\n' + head + '</head>\n<body>' + parts.join('') + '</body>\n</html>\n';
+  }
+  function toast(msg) {
+    if (!toastEl) { toastEl = document.createElement('div'); toastEl.className = 'dw-toast'; toastEl.setAttribute('role', 'status'); document.body.appendChild(toastEl); }
+    toastEl.textContent = msg; toastEl.hidden = false;
+    if (toastTimer) { clearTimeout(toastTimer); }
+    toastTimer = setTimeout(function () { toastEl.hidden = true; }, 6000);
+  }
+  function save() {
+    if (saving || !ns) { return; }
+    saving = true; render();
+    var html;
+    try { html = rebuildDocument(); } catch (err) { saving = false; render(); toast('Could not assemble the page: ' + err.message); return; }
+    ns.publish(html).then(function () { dirty = false; toast('Rating saved — reloading to the new version…'); }, function (e) {
+      saving = false;
+      var code = e && e.code;
+      if (code === 'conflict') { toast('Someone published a newer version first — reloading to it. This rating was not saved.'); }
+      else if (code === 'not_writer' || code === 'not_granted' || code === 'not_declared' || code === 'consent_required') { ns = null; render(); toast('This view is read-only — only the author can rate.'); }
+      else if (code === 'rate_limited') { render(); toast('Saving too often — wait a moment, then press Save rating again.'); }
+      else if (code === 'too_large') { render(); toast('The page is too large to save.'); }
+      else { render(); toast('Save failed (' + (code || 'unknown') + '). Your rating is still on screen — try again.'); }
+    });
+  }
+
+  /* ---- boot ---- */
+  function boot() {
+    open = readOpen();
+    render();
+    window.addEventListener('resize', place);
+    if (window.claude && typeof window.claude.use === 'function') {
+      window.claude.use('artifact').then(function (a) { if (a) { ns = a; render(); } }, function () { /* read-only view */ });
+    }
+  }
+  window.AIDisclosure = { data: data, render: render, rebuild: rebuildDocument, status: function () { var d = data(); return d ? discStatus(d) : null; }, humanPct: function () { var d = data(); return d ? humanPct(d) : null; }, toggle: function (v) { open = (v == null) ? !open : !!v; writeOpen(open); render(); return open; } };
+  if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', boot); } else { boot(); }
+})();
+</script>

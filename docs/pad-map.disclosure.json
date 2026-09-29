@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "agent": {
+    "model": "Claude Opus 5.5",
+    "axes": {
+      "framing": { "lead": 2, "note": "Vin asked for an outline of every pad feature; Claude chose the device map and the section order." },
+      "evidence": { "lead": 3, "note": "Claude read every fact from the daemon source on main (300d507), the padspace skill, and the ~/.ctrl folders." },
+      "analysis": { "lead": 3, "note": "Claude decided what to include and which features count as unverified." },
+      "drafting": { "lead": 3, "note": "Claude wrote all the text and the interactive map; Vin has not edited it." }
+    },
+    "fromHuman": [
+      "The request: a branch and an artifact outlining all the features of the pads",
+      "The agent-flash design goal: green when a session finished, red when it needs input",
+      "Seeing the green agent flash on the device on 2026-09-29"
+    ],
+    "synthesis": [
+      "The pad, by mode: the interactive map, its per-pad descriptions, and the example workspace state",
+      "Workspace grid: the light and flash tables, written from the daemon's color constants",
+      "How the agent flash works: the summary of PR #2",
+      "Round buttons and the four modes: the table and the four mode descriptions",
+      "Your own commands on any free pad: the rules, including that modes take precedence over bottom-row bindings",
+      "Running it: the task table and the ls-ws summary"
+    ],
+    "evidence": "Read in full: bin/launchpad-workspaces on main, the padspace skill, install.sh, bindings.conf, ~/.ctrl/claude and ~/.ctrl/hermes listings. Nothing fetched from outside.",
+    "unsourced": [
+      "The on-screen LED colors are Claude's approximations of the Launchpad palette indices",
+      "The ~10 ms report latency comes from the padspace skill, not re-measured"
+    ],
+    "uncertain": [
+      "Red agent flash from a real permission prompt has not been seen on the device",
+      "Green agent flash clearing on focus has not been confirmed",
+      "Pressing a Session-mode pad has never been tried on the device"
+    ],
+    "sessions": [
+      { "date": "2026-09-29", "model": "Claude Opus 5.5", "turns": 1, "what": "Built the page on branch pad-features-doc from main at 300d507" }
+    ],
+    "versions": 1
+  },
+  "human": { "name": "Vineet Tiruvadi", "trust": {}, "lead": {} },
+  "metrics": {}
+}

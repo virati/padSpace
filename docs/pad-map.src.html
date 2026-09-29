@@ -1,0 +1,377 @@
+<title>padSpace Pad Map</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans+Condensed:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style id="page-style">
+/* Layout: one reading column; the device map is the figure right under the header,
+   drawn as the hardware (dark body, 8x8 square pads, round buttons top and right). */
+:root {
+  --bg: #eef0f2;          /* cool grey ground, a touch blue like the device's plastic */
+  --surface: #f8f9fa;
+  --surface-2: #e3e6ea;
+  --ink: #16191d;
+  --ink-2: #454b53;
+  --ink-3: #6d747d;
+  --hair: rgba(22, 25, 29, .10);
+  --hair-2: rgba(22, 25, 29, .20);
+  --accent: #0f7a8a;      /* teal: links and the mode selector, never an LED color */
+  --body-case: #1c1f23;   /* the controller itself stays dark in both themes */
+  --body-edge: #2b3036;
+  --pad-off: #30353b;
+  --pad-label: rgba(255, 255, 255, .78);
+  --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --f-body: "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
+  --f-ui: "IBM Plex Sans Condensed", "IBM Plex Sans", -apple-system, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121417; --surface: #1a1d21; --surface-2: #24282d; --ink: #e8eaed; --ink-2: #b4bac2; --ink-3: #8a919a;
+  --hair: rgba(255, 255, 255, .10); --hair-2: rgba(255, 255, 255, .20); --accent: #4cc2d1;
+  --body-case: #0b0c0e; --body-edge: #262a30; --pad-off: #262a2f; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #121417; --surface: #1a1d21; --surface-2: #24282d; --ink: #e8eaed; --ink-2: #b4bac2; --ink-3: #8a919a;
+  --hair: rgba(255, 255, 255, .10); --hair-2: rgba(255, 255, 255, .20); --accent: #4cc2d1;
+  --body-case: #0b0c0e; --body-edge: #262a30; --pad-off: #262a2f; color-scheme: dark; }
+
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15.5px; line-height: 1.6; }
+.sheet { max-width: 760px; margin: 0 auto; padding-inline: 16px; padding-block: 32px 128px; }
+main { display: grid; gap: 40px; }
+main > section { min-width: 0; }
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.stamp { font-family: var(--f-mono); font-size: 12px; color: var(--ink-3); margin: 0 0 18px; }
+h1 { font-family: var(--f-display); font-weight: 800; font-size: clamp(26px, 5vw, 36px); line-height: 1.12; letter-spacing: -.01em; margin: 0 0 12px; text-wrap: balance; }
+h2 { font-family: var(--f-display); font-weight: 700; font-size: 21px; line-height: 1.25; margin: 0 0 10px; text-wrap: balance; }
+h3 { font-family: var(--f-ui); font-weight: 600; font-size: 15px; letter-spacing: .02em; margin: 20px 0 6px; }
+p, ul, ol { margin: 0 0 12px; max-width: 65ch; }
+li { margin-bottom: 4px; }
+.lede { font-size: 17px; color: var(--ink-2); margin-bottom: 28px; }
+code, .mono { font-family: var(--f-mono); font-size: .88em; }
+code { background: var(--surface-2); padding: 1px 5px; border-radius: 3px; }
+.note { font-size: 13.5px; color: var(--ink-2); border-left: 2px solid var(--hair-2); padding-left: 12px; }
+
+.tbl { overflow-x: auto; margin: 6px 0 14px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th { font-family: var(--f-ui); font-weight: 600; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--hair-2); }
+td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--hair); vertical-align: top; }
+td .mono { white-space: nowrap; font-variant-numeric: tabular-nums; }
+td code { overflow-wrap: anywhere; }
+.sw { display: inline-block; width: 11px; height: 11px; border-radius: 2px; vertical-align: -1px; margin-right: 6px; border: 1px solid var(--hair-2); }
+.sw.blink { animation: lp-blink 1s steps(1) infinite; }
+
+/* ---- the device figure ---- */
+.fig { margin: 0; }
+.modes { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px; }
+.mode-btn { font-family: var(--f-ui); font-size: 13.5px; font-weight: 500; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--hair-2); background: transparent; color: var(--ink); cursor: pointer; }
+.mode-btn:hover { border-color: var(--ink-3); }
+.mode-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.device { background: var(--body-case); border: 1px solid var(--body-edge); border-radius: 14px; padding: clamp(10px, 2.4vw, 20px); max-width: 560px; }
+.lp { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: clamp(4px, 1.1vw, 8px); }
+.lp-btn { position: relative; aspect-ratio: 1; max-width: 100%; border: 0; padding: 0; cursor: pointer; background: var(--pad-off); color: var(--pad-label); font-family: var(--f-mono); font-size: clamp(8px, 1.6vw, 10.5px); line-height: 1.05; display: flex; align-items: center; justify-content: center; text-align: center; overflow: hidden; border-radius: 4px; }
+.lp-btn.round { border-radius: 50%; transform: scale(.78); }
+.lp-btn.logo { background: transparent; cursor: default; color: var(--ink-3); }
+.lp-btn[data-lit] { box-shadow: 0 0 10px -2px var(--led); background: var(--led); color: var(--lab, rgba(0, 0, 0, .72)); }
+.lp-btn.flash { animation: lp-flash 1s steps(1) infinite; }
+.lp-btn.breathe { animation: lp-breathe var(--period, 2s) ease-in-out infinite; }
+.lp-btn.sel { outline: 2px solid #fff; outline-offset: 2px; }
+@keyframes lp-flash { 0% { background: var(--led); } 50% { background: var(--led-b, var(--pad-off)); } }
+@keyframes lp-blink { 50% { opacity: .25; } }
+@keyframes lp-breathe { 50% { filter: brightness(.35); } }
+@media (prefers-reduced-motion: reduce) { .lp-btn.flash, .lp-btn.breathe, .sw.blink { animation: none; } }
+.detail { margin-top: 12px; min-height: 3.4em; font-size: 14px; }
+.detail b { font-family: var(--f-ui); font-weight: 600; }
+.detail .id { font-family: var(--f-mono); font-size: 12px; color: var(--ink-3); margin-left: 6px; }
+figcaption { font-size: 13.5px; color: var(--ink-2); margin-top: 10px; max-width: 65ch; }
+
+/*__BOTTOM_BAR_BLOCK__*/
+</style>
+<!--__DW_STYLE__-->
+<div id="editor-bar"></div>
+<div class="sheet">
+<header data-editable="header">
+<p class="stamp">First published 2026-09-29 16:51 PT · Last updated 2026-09-29 16:51 PT</p>
+<h1>padSpace pad map: Launchpad Mini MK3, main at 300d507</h1>
+<p class="lede">Every pad and round button on the Launchpad, what it does in each mode, and what its light means. Everything here is read from the daemon on <code>main</code> at commit <code>300d507</code> (2026-09-29).</p>
+</header>
+<div id="disclosure-widget" aria-label="AI disclosure"></div>
+<script type="application/json" id="disclosure">
+__DISCLOSURE_JSON__
+</script>
+<main>
+<section data-editable="figure">
+<h2>The pad, by mode</h2>
+<figure class="fig">
+<div id="padmap" data-generated></div>
+<figcaption>Pick a mode, then tap or hover a pad to see what it does. The top two pad rows are the workspace grid in every mode. The grid shows an example state, not your live desktops, including one green and one red agent flash. The on-screen colors are close to the device palette, not exact.</figcaption>
+</figure>
+</section>
+
+<section data-editable="workspace">
+<h2>Workspace grid (top two pad rows, always on)</h2>
+<p>The top two pad rows are two 2×4 grids, one per display. Each grid is fixed to its display by screen order, not by focus.</p>
+<div class="tbl"><table>
+<thead><tr><th>Pads</th><th>Display</th><th>Desktops</th></tr></thead>
+<tbody>
+<tr><td class="mono">81–84 / 71–74</td><td>Screen 0: HDMI-A-1, the ultrawide (left grid)</td><td>1–4 on top, 5–8 below</td></tr>
+<tr><td class="mono">85–88 / 75–78</td><td>Screen 1: eDP-1, the laptop (right grid)</td><td>1–4 on top, 5–8 below</td></tr>
+</tbody></table></div>
+<ul>
+<li><b>Tap</b> switches that display to that desktop.</li>
+<li><b>Hold for 0.55 s or longer</b> also moves the window you were using to that desktop. Holding a pad on the other grid moves the window to the other display. The pads have no velocity sensing (every hit sends 127), so hold time stands in for pressing hard.</li>
+</ul>
+<h3>What the light means</h3>
+<div class="tbl"><table>
+<thead><tr><th>Light</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><span class="sw" style="background:#ffffff"></span>White</td><td>The display's current desktop</td></tr>
+<tr><td><span class="sw" style="background:#ff3b30"></span>Red</td><td>Desktop has a VS Code window</td></tr>
+<tr><td><span class="sw" style="background:#2fd158"></span>Green</td><td>Desktop has the Notion "Vineet Work Log" page as the active tab</td></tr>
+<tr><td><span class="sw" style="background:#3b82f6"></span>Blue</td><td>Desktop has Slack</td></tr>
+<tr><td><span class="sw" style="background:#22d3ee"></span>Cyan</td><td>Work log and Slack on the same desktop</td></tr>
+<tr><td><span class="sw" style="background:#6b6f75"></span>Dim white</td><td>Desktop has other windows</td></tr>
+<tr><td><span class="sw" style="background:var(--pad-off)"></span>Off</td><td>Empty desktop, or that display is not connected (whole grid dark)</td></tr>
+</tbody></table></div>
+<p>White wins over the app colors. When several apps are on one desktop, the earliest rule in <code>MARKERS</code> wins, unless <code>MARKER_COMBOS</code> names that pair. Updates come from a KWin script that reports within about 10 ms of a desktop switch, window move or title change. A 5 s poll is only a backup.</p>
+<h3>Flashing pads</h3>
+<div class="tbl"><table>
+<thead><tr><th>Flash</th><th>Meaning</th><th>Stops when</th></tr></thead>
+<tbody>
+<tr><td><span class="sw blink" style="background:#2fd158"></span>Green</td><td>A Claude Code session on that desktop finished its turn</td><td>You focus that session's window</td></tr>
+<tr><td><span class="sw blink" style="background:#ff3b30"></span>Red</td><td>A Claude Code session there is waiting on you: a permission prompt, a question or MCP dialog, or a failed turn</td><td>The session carries on: you answer, a tool runs, or you send a prompt</td></tr>
+<tr><td><span class="sw blink" style="background:#9a9ea4"></span>Bright/dim of its own color</td><td>A window on that desktop is asking for attention (KWin urgency)</td><td>The window stops asking</td></tr>
+</tbody></table></div>
+</section>
+
+<section data-editable="agents">
+<h2>How the agent flash works</h2>
+<p>Added on 2026-09-29 (PR #2). The flash alternates with the pad's normal color, so the current desktop still reads white. Red wins over green on a shared pad.</p>
+<ul>
+<li><b>Hook.</b> <code>~/.local/bin/padspace-agent-hook</code> is a Claude Code hook on Stop, StopFailure, Notification, UserPromptSubmit and PostToolUse. It writes each session's last state to <code>~/.local/state/padspace/agents/&lt;session_id&gt;.json</code>. <code>tools/install-agent-hooks.py</code> adds it to <code>~/.claude/settings.json</code>, and <code>--remove</code> takes it out.</li>
+<li><b>Session file.</b> <code>~/.claude/sessions/&lt;pid&gt;.json</code> tells the daemon which process each session is and whether it is idle. Its <code>waiting</code> status also counts as red. It is not enough on its own, because a tool-permission prompt leaves it at <code>busy</code>.</li>
+<li><b>Which pad.</b> The session's pad is the desktop of the window it runs in: the window whose pid is one of the session process's parents (its Konsole).</li>
+</ul>
+<p class="note">Seen on the device: green, from a real Stop hook, on 2026-09-29. Not yet seen: red from a real permission prompt, and green clearing on focus. Only sessions on this machine count; Polaris sessions have no local window.</p>
+</section>
+
+<section data-editable="modes">
+<h2>Round buttons and the four modes</h2>
+<div class="tbl"><table>
+<thead><tr><th>Button</th><th>Label</th><th>Does</th><th>Light when on</th></tr></thead>
+<tbody>
+<tr><td class="mono">cc91–94</td><td>↑ ↓ ← →</td><td>Real arrow keys in the focused window, via ydotoold. One key per press, no repeat.</td><td>Always dim white</td></tr>
+<tr><td class="mono">cc95</td><td>Session</td><td>Bottom two rows show running Claude Code sessions</td><td>White</td></tr>
+<tr><td class="mono">cc96</td><td>Drums</td><td>Bottom two rows play a 16-pad drum kit</td><td>Amber</td></tr>
+<tr><td class="mono">cc97</td><td>Keys</td><td>Bottom-left 3×4 block types digits</td><td>Green</td></tr>
+<tr><td class="mono">cc98</td><td>User</td><td>Bottom two rows launch skills</td><td>White</td></tr>
+</tbody></table></div>
+<p>The four mode buttons are toggles, and only one can be on at a time. Turning one on turns the others off. With all four off, the bottom rows are dark and only the workspace grid is live. That is also how the daemon starts.</p>
+<h3>Session (cc95)</h3>
+<p>Bottom row (11–18): Claude Code sessions on this machine. Second row (21–28): your own sessions on Polaris, checked over SSH every 6 s in a background thread. Other users' Polaris sessions are never shown. Green means the last tool result had no error, red means it did, and dim white means the transcript could not be read. Pressing a pad focuses that session's window and switches to its desktop. If there is no window (always the case for Polaris), it opens a new Konsole running <code>claude --resume</code>.</p>
+<p class="note">Pressing a Session pad has not been tried on the device yet.</p>
+<h3>Drums (cc96)</h3>
+<p>Sixteen synthesized 909/808-style samples, preloaded into PipeWire when the mode turns on. Bottom row: kick-punch, kick-sub, kick-hard, snare, clap, hat-closed, hat-open, crash. Second row: sub-drop, tom-low, tom-high, shaker, pluck, snap, ride, reverse-cymbal. To change a sound, replace the same-named WAV in <code>~/.local/share/padspace/drumkit/</code> and toggle Drums again.</p>
+<h3>Keys (cc97)</h3>
+<p>A numpad in the bottom-left 3×4 block: 7 8 9 / 4 5 6 / 1 2 3, and a wide 0 across the three bottom pads. Each digit pad breathes green once every N seconds (pad 7 every 7 s); the 0 row glows steadily.</p>
+<h3>User (cc98)</h3>
+<p>Bottom row, amber: Claude Code skills from <code>~/.ctrl/claude/</code>. Second row, blue: Hermes skills from <code>~/.ctrl/hermes/</code>. Up to 8 per row, sorted by the number prefix, re-read every time the mode turns on. A press opens a Konsole with that skill. Today the rows hold constellupdates, coremap, padspace, linear-issue, and research, productivity, note-taking, devops.</p>
+</section>
+
+<section data-editable="bindings">
+<h2>Your own commands on any free pad</h2>
+<p>Any pad outside the workspace grid, and any of the right-hand round buttons (cc19–89), can run a shell command. Add lines to <code>~/.config/padspace/bindings.conf</code>; the file reloads within about 3 s.</p>
+<pre class="tbl"><code>36 = konsole                      # pad 36 opens a terminal
+12 @13 = playerctl play-pause     # pad 12, lit yellow (palette 13)
+cc59 @5 = loginctl lock-session   # right-column button, lit red</code></pre>
+<ul>
+<li>Bound pads stay lit (blue by default) and flash white on press. Commands run detached through <code>systemd-run --user</code>.</li>
+<li>The workspace grid (71–78, 81–88) and the top round row (cc91–98) are reserved. A binding on them is logged and ignored.</li>
+<li>When a mode is on, it owns its pads. A binding on the bottom two rows only fires while all four modes are off.</li>
+<li>No bindings are set today.</li>
+<li>To find a button's number, press it and look for the "unbound pad note N" or "unbound control ccN" line in the daemon log.</li>
+</ul>
+</section>
+
+<section data-editable="device">
+<h2>Running it</h2>
+<div class="tbl"><table>
+<thead><tr><th>Task</th><th>How</th></tr></thead>
+<tbody>
+<tr><td>Watch presses and decisions</td><td><code>journalctl --user -u launchpad-workspaces -f</code></td></tr>
+<tr><td>Restart (from the claudebox toolbox)</td><td><code>busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager RestartUnit ss launchpad-workspaces.service replace</code></td></tr>
+<tr><td>Hand the pad back for music</td><td>Stop the service. On stop it puts the Launchpad back in its standalone mode.</td></tr>
+<tr><td>Unplug and replug</td><td>Handled. The daemon checks the MIDI ports every 5 s and reconnects when they change.</td></tr>
+<tr><td>Install or refresh</td><td><code>./install.sh</code> in the repo: daemon, <code>ls-ws</code>, hook, units, and the hook entries in Claude settings</td></tr>
+</tbody></table></div>
+<h3>The same view in a terminal</h3>
+<p><code>ls-ws</code> lists the windows on each desktop, per display. <code>--desc</code> adds a one-line summary per desktop, <code>--prompts</code> shows each Claude session's status and last prompt, and <code>--banner</code> shows a 30 s summary at the top of the screen.</p>
+<p class="note">Files: daemon <code>bin/launchpad-workspaces</code>, installed at <code>~/.local/bin/launchpad-workspaces</code>; unit <code>launchpad-workspaces.service</code>; repo <code>~/Projects/padSpace</code> (<a href="https://github.com/virati/padSpace">github.com/virati/padSpace</a>).</p>
+</section>
+</main>
+</div>
+<script id="editor-script">
+(function () {
+  'use strict';
+
+  var ORDER = ["header", "figure", "workspace", "agents", "modes", "bindings", "device"];
+  var SHELL = {
+    header:    ['<header data-editable="header">', '</header>'],
+    figure:    ['<section data-editable="figure">', '</section>'],
+    workspace: ['<section data-editable="workspace">', '</section>'],
+    agents:    ['<section data-editable="agents">', '</section>'],
+    modes:     ['<section data-editable="modes">', '</section>'],
+    bindings:  ['<section data-editable="bindings">', '</section>'],
+    device:    ['<section data-editable="device">', '</section>'],
+  };
+  var ABOVE = { header: 1 };
+
+/*__CANONICAL_EDITOR__*/
+</script>
+<script id="chart-script">
+(function () {
+  'use strict';
+  /* Launchpad palette indices used by the daemon -> screen colors (close, not exact). */
+  var PAL = { 1: '#6b6f75', 2: '#a3a7ad', 3: '#ffffff', 5: '#ff3b30', 6: '#b3261e', 7: '#7a1a14', 9: '#ff9f0a',
+    13: '#ffd60a', 21: '#2fd158', 33: '#5ee6c8', 37: '#22d3ee', 40: '#6ea8ff', 41: '#3f6fd8', 45: '#3b82f6',
+    53: '#a855f7', 57: '#ff5fa2', 58: '#c0265f' };
+  var DARK_LABEL = { 3: 1, 13: 1, 9: 1, 21: 1, 37: 1, 33: 1, 2: 1 };
+  var TOP = { 91: '↑', 92: '↓', 93: '←', 94: '→', 95: 'Session', 96: 'Drums', 97: 'Keys', 98: 'User' };
+  var MODES = [['default', 'Default'], ['session', 'Session'], ['drums', 'Drums'], ['keys', 'Keys'], ['user', 'User']];
+  var MODE_CC = { session: 95, drums: 96, keys: 97, user: 98 };
+  var MODE_ON = { session: 3, drums: 9, keys: 21, user: 3 };
+  var DRUMS = { 11: ['kick-punch', 5], 12: ['kick-sub', 7], 13: ['kick-hard', 6], 14: ['snare', 13], 15: ['clap', 9],
+    16: ['hat-closed', 37], 17: ['hat-open', 33], 18: ['crash', 3], 21: ['sub-drop', 45], 22: ['tom-low', 41],
+    23: ['tom-high', 40], 24: ['shaker', 21], 25: ['pluck', 53], 26: ['snap', 57], 27: ['ride', 2], 28: ['reverse-cymbal', 58] };
+  var NUMPAD = { 41: 7, 42: 8, 43: 9, 31: 4, 32: 5, 33: 6, 21: 1, 22: 2, 23: 3, 11: 0, 12: 0, 13: 0 };
+  var CLAUDE_SKILLS = ['constellupdates', 'coremap', 'padspace', 'linear-issue'];
+  var HERMES_SKILLS = ['research', 'productivity', 'note-taking', 'devops'];
+  /* example workspace state for the Default view: [color, flash color or null] */
+  var EXAMPLE = { 83: [3, null], 81: [1, null], 82: [5, null], 71: [1, 21], 84: [45, null], 72: [1, null],
+    86: [3, null], 85: [1, null], 88: [1, 5], 76: [21, null], 77: [1, null] };
+  var EXAMPLE_NOTE = { 83: 'white: current desktop on this display', 82: 'red: a VS Code window is here',
+    84: 'blue: Slack is here', 76: 'green: the Notion work log is the active tab here',
+    71: 'flashing green: a Claude session here finished its turn', 88: 'flashing red: a Claude session here is waiting on you' };
+  var mode = 'default', sel = null, host = null;
+
+  function grid(note) { return note >= 71 && note <= 88 && note % 10 >= 1 && note % 10 <= 8; }
+  function wsInfo(note) {
+    var row = Math.floor(note / 10), col = note % 10, scr = col <= 4 ? 0 : 1;
+    var desk = (col - (scr ? 4 : 0)) + (row === 7 ? 4 : 0);
+    return { scr: scr, desk: desk };
+  }
+
+  /* -> {color, flash, breathe, label, title, what} for one button in the current mode */
+  function describe(id) {
+    var d = { color: 0, label: '', title: '', what: '' };
+    if (id === 'logo') { d.title = 'Novation logo'; d.what = 'Not a button.'; return d; }
+    if (id.charAt(0) === 'c') {
+      var cc = +id.slice(2);
+      if (TOP[cc]) {
+        d.label = TOP[cc];
+        if (cc <= 94) { d.color = 1; d.title = 'Arrow key ' + TOP[cc]; d.what = 'Sends a real arrow key to the focused window. Works in every mode.'; return d; }
+        var m = { 95: 'session', 96: 'drums', 97: 'keys', 98: 'user' }[cc];
+        d.color = mode === m ? MODE_ON[m] : 1;
+        d.title = TOP[cc] + ' mode (toggle)';
+        d.what = { session: 'Bottom two rows show running Claude Code sessions: this machine below, Polaris above.',
+          drums: 'Bottom two rows play the 16-pad drum kit.', keys: 'Bottom-left 3×4 block becomes a numpad.',
+          user: 'Bottom two rows launch Claude Code and Hermes skills.' }[m] + (mode === m ? ' On now.' : ' Off now; turning it on turns the other modes off.');
+        return d;
+      }
+      d.title = 'Round button cc' + cc; d.what = 'Free. Bind a shell command to it in bindings.conf (e.g. "cc' + cc + ' = konsole").';
+      return d;
+    }
+    var note = +id.slice(1);
+    if (grid(note)) {
+      var w = wsInfo(note);
+      d.label = String(w.desk);
+      d.title = (w.scr ? 'Screen 1 (eDP-1, laptop)' : 'Screen 0 (HDMI-A-1, ultrawide)') + ', desktop ' + w.desk;
+      d.what = 'Tap: switch to it. Hold 0.55 s: also move the window you were using there.';
+      if (EXAMPLE[note]) {
+        d.color = EXAMPLE[note][0]; d.flash = EXAMPLE[note][1];
+        if (EXAMPLE_NOTE[note]) { d.what += ' Example light: ' + EXAMPLE_NOTE[note] + '.'; }
+      }
+      return d;
+    }
+    if (mode === 'drums' && DRUMS[note]) { d.color = DRUMS[note][1]; d.label = DRUMS[note][0].replace('-', '\n'); d.title = 'Drum: ' + DRUMS[note][0]; d.what = 'Plays the ' + DRUMS[note][0] + ' sample.'; return d; }
+    if (mode === 'keys' && NUMPAD[note] != null) {
+      var n = NUMPAD[note]; d.color = 21; d.label = String(n); d.breathe = n ? n : 0;
+      d.title = 'Digit ' + n; d.what = 'Types ' + n + '.' + (n ? ' Breathes green once every ' + n + ' s.' : ' The three bottom pads are one wide 0, lit steadily.');
+      return d;
+    }
+    if (mode === 'user' && note >= 11 && note <= 28) {
+      var row = note <= 18 ? 0 : 1, i = note - (row ? 21 : 11), list = row ? HERMES_SKILLS : CLAUDE_SKILLS;
+      if (list[i]) { d.color = row ? 45 : 9; d.label = list[i].slice(0, 6); d.title = (row ? 'Hermes skill: ' : 'Claude Code skill: ') + list[i]; d.what = 'Opens a Konsole running ' + (row ? 'hermes --skills ' + list[i] + ' chat.' : 'claude "/' + list[i] + '".'); }
+      else { d.title = (row ? 'Hermes' : 'Claude Code') + ' slot ' + (i + 1); d.what = 'Empty slot. Add an entry to ~/.ctrl/' + (row ? 'hermes' : 'claude') + '/ to fill it.'; }
+      return d;
+    }
+    if (mode === 'session' && note >= 11 && note <= 28) {
+      var polaris = note >= 21;
+      d.title = (polaris ? 'Polaris' : 'Local') + ' session slot ' + (note - (polaris ? 20 : 10));
+      d.what = 'Lights for one running Claude Code session ' + (polaris ? 'of yours on Polaris' : 'on this machine') + ': green if the last tool result had no error, red if it did. Press to focus its window, or resume it in a new Konsole.';
+      var demo = { 11: 21, 12: 21, 13: 5, 21: 21, 22: 1 }[note];
+      if (demo) { d.color = demo; d.what += ' (Lit here as an example.)'; }
+      return d;
+    }
+    d.title = 'Pad ' + note;
+    d.what = (note <= 28 ? 'Used by Session, Drums, Keys or User when one is on. ' : note <= 43 && note % 10 <= 3 ? 'Part of the Keys numpad when Keys is on. ' : '') + 'Otherwise free: bind a shell command in bindings.conf (e.g. "' + note + ' = konsole").';
+    return d;
+  }
+
+  function ids() {
+    var out = [];
+    for (var c = 91; c <= 98; c++) { out.push('cc' + c); }
+    out.push('logo');
+    for (var r = 8; r >= 1; r--) {
+      for (var k = 1; k <= 8; k++) { out.push('n' + (10 * r + k)); }
+      out.push('cc' + (10 * r + 9));
+    }
+    return out;
+  }
+
+  function idLabel(id) { return id === 'logo' ? '' : id.charAt(0) === 'c' ? id : 'note ' + id.slice(1); }
+
+  function render() {
+    host = document.getElementById('padmap');
+    if (!host) { return; }
+    var h = '<div class="modes" role="group" aria-label="Mode">';
+    MODES.forEach(function (m) { h += '<button type="button" class="mode-btn" data-mode="' + m[0] + '" aria-pressed="' + (mode === m[0]) + '">' + m[1] + '</button>'; });
+    h += '</div><div class="device"><div class="lp">';
+    ids().forEach(function (id) {
+      var d = describe(id), round = id.charAt(0) === 'c' || id === 'logo', st = '', cls = 'lp-btn' + (round ? ' round' : '') + (id === 'logo' ? ' logo' : '');
+      if (d.color) {
+        st += '--led:' + PAL[d.color] + ';';
+        if (DARK_LABEL[d.color]) { st += '--lab:rgba(0,0,0,.72);'; } else { st += '--lab:rgba(255,255,255,.9);'; }
+      }
+      if (d.flash) { cls += ' flash'; st += '--led-b:' + PAL[d.flash] + ';'; }
+      if (d.breathe) { cls += ' breathe'; st += '--period:' + d.breathe + 's;'; }
+      if (sel === id) { cls += ' sel'; }
+      h += '<button type="button" class="' + cls + '" data-id="' + id + '"' + (d.color ? ' data-lit' : '') + (st ? ' style="' + st + '"' : '') +
+        ' aria-label="' + (d.title || idLabel(id)).replace(/"/g, '&quot;') + '"' + (id === 'logo' ? ' tabindex="-1" aria-hidden="true"' : '') + '>' +
+        (d.label ? d.label.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>') : '') + '</button>';
+    });
+    h += '</div></div><div class="detail" aria-live="polite"></div>';
+    host.innerHTML = h;
+    Array.prototype.forEach.call(host.querySelectorAll('.mode-btn'), function (b) {
+      b.addEventListener('click', function () { mode = b.getAttribute('data-mode'); render(); show(sel); });
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('.lp-btn'), function (b) {
+      var id = b.getAttribute('data-id');
+      if (id === 'logo') { return; }
+      b.addEventListener('mouseenter', function () { show(id); });
+      b.addEventListener('focus', function () { show(id); });
+      b.addEventListener('click', function () { sel = id; render(); show(id); var nb = host.querySelector('[data-id="' + id + '"]'); if (nb) { nb.focus(); } });
+    });
+    show(sel);
+  }
+
+  function show(id) {
+    var box = host && host.querySelector('.detail');
+    if (!box) { return; }
+    if (!id) { box.innerHTML = '<span style="color:var(--ink-3)">Tap or hover any pad.</span>'; return; }
+    var d = describe(id);
+    box.innerHTML = '<b>' + d.title.replace(/</g, '&lt;') + '</b><span class="id">' + idLabel(id) + '</span><br>' + d.what.replace(/</g, '&lt;');
+  }
+
+  function boot() { render(); }
+  if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', boot); } else { boot(); }
+})();
+</script>
+<!--__DW_SCRIPT__-->
