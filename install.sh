@@ -75,6 +75,7 @@ fi
 install -Dm755 bin/launchpad-workspaces "$HOME/.local/bin/launchpad-workspaces"
 install -Dm755 tools/ls-ws "$HOME/.local/bin/ls-ws"
 install -Dm755 tools/ls-ws-banner "$HOME/.local/bin/ls-ws-banner"
+install -Dm755 tools/padspace-agent-hook "$HOME/.local/bin/padspace-agent-hook"
 install -Dm644 systemd/launchpad-workspaces.service \
   "$HOME/.config/systemd/user/launchpad-workspaces.service"
 install -Dm644 systemd/ydotoold.service \
@@ -99,6 +100,11 @@ fi
 
 # ---- Claude Code skill (optional but free)
 install -Dm644 skill/SKILL.md "$HOME/.claude/skills/padspace/SKILL.md"
+
+# ---- Claude Code hooks that feed the agent flash (merged, idempotent)
+if [ -f "$HOME/.claude/settings.json" ]; then
+  python3 tools/install-agent-hooks.py
+fi
 
 # ---- enable + (re)start; 'systemctl --user start' fails inside toolbox
 #      containers, so drive systemd over D-Bus, which works everywhere.
