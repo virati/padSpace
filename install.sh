@@ -73,6 +73,8 @@ fi
 
 # ---- daemon + units (ydotoold provides arrow-key injection for cc91-94)
 install -Dm755 bin/launchpad-workspaces "$HOME/.local/bin/launchpad-workspaces"
+install -Dm755 tools/ls-ws "$HOME/.local/bin/ls-ws"
+install -Dm755 tools/ls-ws-banner "$HOME/.local/bin/ls-ws-banner"
 install -Dm755 tools/padspace-agent-hook "$HOME/.local/bin/padspace-agent-hook"
 install -Dm644 systemd/launchpad-workspaces.service \
   "$HOME/.config/systemd/user/launchpad-workspaces.service"
