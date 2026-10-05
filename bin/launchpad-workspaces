@@ -186,6 +186,13 @@ CLAUDE_SESSIONS_DIR = os.path.expanduser("~/.claude/sessions")
 COLOR_AGENT_DONE = 21    # green
 COLOR_AGENT_INPUT = 5    # red
 COLOR_AGENT_HERE = 13    # yellow: desktop holds an AI agent's terminal (instead of dim white)
+# Non-current workspace pads are re-sent as RGB SysEx at this fraction of their
+# palette brightness, so the white current desktop stands out (palette 1 is the
+# dimmest white the palette has). 7-bit RGB approximations of the palette.
+INACTIVE_SCALE = 0.5
+PALETTE_RGB = {1: (15, 15, 15), 5: (127, 0, 0), 13: (127, 127, 0),
+               21: (0, 127, 0), 37: (0, 84, 127), 45: (0, 0, 127),
+               53: (127, 0, 127)}
 # What counts as an agent, by program name (argv[0], or the script an
 # interpreter runs). Also caught over ssh: `ssh host claude`, and a plain
 # `ssh host` session in which an agent is running on an AGENT_SSH_HOSTS host.
@@ -1073,6 +1080,7 @@ def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, urg0, urg1,
           session_map=None, agent=None, agent_ws=frozenset()):
     msg = []
     flash_msg = []
+    rgb = []   # dimmed non-current pads, sent as one RGB SysEx
     agent = agent or {}
     for scr, (grid, cur, marked, occ, urg) in enumerate(
             ((GRID_S0, cur0, marked0, occ0, urg0),
@@ -1105,6 +1113,10 @@ def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, urg0, urg1,
                 flash_msg += ["91", f"{note:02X}", f"{color:02X}"]
             else:
                 msg += ["90", f"{note:02X}", f"{color:02X}"]
+                if color and color != COLOR_ACTIVE and color in PALETTE_RGB:
+                    rgb += ["03", f"{note:02X}"] + [
+                        f"{max(1, round(v * INACTIVE_SCALE)) if v else 0:02X}"
+                        for v in PALETTE_RGB[color]]
     for note, (color, _) in note_binds.items():
         msg += ["90", f"{note:02X}", f"{color:02X}"]
     for cc, (color, _) in cc_binds.items():
@@ -1134,6 +1146,8 @@ def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, urg0, urg1,
     msg += ["B0", f"{SESSION_CC:02X}", f"{session_color:02X}"]
     for cc in ARROW_CCS:
         msg += ["B0", f"{cc:02X}", f"{COLOR_ARROW:02X}"]
+    if rgb:
+        msg += ["F0", "00", "20", "29", "02", "0D", "03"] + rgb + ["F7"]
     # flash messages go after the static ones: a ch1 note-on cancels a flash
     send_hex(ports, " ".join(msg + flash_msg))
 
