@@ -185,6 +185,22 @@ AGENT_STATE_DIR = os.path.expanduser("~/.local/state/padspace/agents")
 CLAUDE_SESSIONS_DIR = os.path.expanduser("~/.claude/sessions")
 COLOR_AGENT_DONE = 21    # green
 COLOR_AGENT_INPUT = 5    # red
+COLOR_AGENT_HERE = 13    # yellow: desktop holds an AI agent's terminal (instead of dim white)
+# Non-current workspace pads are re-sent as RGB SysEx at this fraction of their
+# palette brightness, so the white current desktop stands out (palette 1 is the
+# dimmest white the palette has). 7-bit RGB approximations of the palette.
+INACTIVE_SCALE = 0.5
+PALETTE_RGB = {1: (15, 15, 15), 5: (127, 0, 0), 13: (127, 127, 0),
+               21: (0, 127, 0), 37: (0, 84, 127), 45: (0, 0, 127),
+               53: (127, 0, 127)}
+# What counts as an agent, by program name (argv[0], or the script an
+# interpreter runs). Also caught over ssh: `ssh host claude`, and a plain
+# `ssh host` session in which an agent is running on an AGENT_SSH_HOSTS host.
+AGENT_NAMES = {"claude", "pi", "hermes", "codex", "gemini", "aider",
+               "opencode", "goose", "crush", "amp", "cursor-agent"}
+AGENT_HELPER_ARGS = {"bg-pty-host", "bg-spare", "daemon"}   # claude's own helpers
+AGENT_SSH_HOSTS = ["polaris"]
+AGENT_SSH_POLL_SECS = 6.0
 AGENT_POLL_SECS = 1.0
 AGENT_PRUNE_SECS = 600   # drop hook state of sessions gone this long
 
@@ -618,6 +634,157 @@ def agent_pads(alerts, windows, active_pid, acked):
     return pads
 
 
+def agent_argv(argv):
+    """True if argv runs an AI agent CLI: the program itself (claude, codex),
+    or an interpreter running one (node .../bin/pi, python3 .../hermes).
+    Claude Code's own background helpers (bg-pty-host, daemon) don't count."""
+    if not argv:
+        return False
+    name = os.path.basename(argv[0])
+    if name in AGENT_NAMES:
+        return len(argv) < 2 or argv[1] not in AGENT_HELPER_ARGS
+    if re.fullmatch(r"(node|bun|deno|python[\d.]*)", name) and len(argv) > 1:
+        return re.sub(r"\.(m?js|py)$", "", os.path.basename(argv[1])) in AGENT_NAMES
+    return False
+
+
+def proc_argv(pid):
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            return [a.decode(errors="replace") for a in f.read().split(b"\0") if a]
+    except OSError:
+        return []
+
+
+def ssh_local_ports(pid):
+    """-> set of local TCP ports of an ssh client's sockets."""
+    inodes = set()
+    try:
+        for fd in os.listdir(f"/proc/{pid}/fd"):
+            t = os.readlink(f"/proc/{pid}/fd/{fd}")
+            if t.startswith("socket:["):
+                inodes.add(t[8:-1])
+    except OSError:
+        return set()
+    ports = set()
+    for tab in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(tab) as f:
+                for row in f.readlines()[1:]:
+                    c = row.split()
+                    if len(c) > 9 and c[9] in inodes:
+                        ports.add(int(c[1].rsplit(":", 1)[1], 16))
+        except OSError:
+            continue
+    return ports
+
+
+def local_agent_pids(remote_ports):
+    """-> set of local pids that are, or carry, an AI agent: agent CLIs
+    running here, ssh clients whose command names one (ssh polaris claude),
+    and ssh clients whose connection a remote agent's SSH_CONNECTION names
+    (remote_ports, from the AGENT_SSH_HOSTS poller)."""
+    out = set()
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        argv = proc_argv(d)
+        if not argv:
+            continue
+        if os.path.basename(argv[0]) == "ssh":
+            if any(agent_argv(argv[i:]) for i in range(1, len(argv))) or \
+                    (remote_ports and ssh_local_ports(d) & remote_ports):
+                out.add(int(d))
+        elif agent_argv(argv):
+            out.add(int(d))
+    return out
+
+
+# Run on each AGENT_SSH_HOSTS host: print the SSH client port of every own
+# process that is an agent CLI (same test as agent_argv), from its
+# SSH_CONNECTION. Inside tmux/screen that variable is the server's, so an
+# agent started there is only caught if the tmux server was started by the
+# same connection.
+REMOTE_AGENT_SCRIPT = r'''
+import os, re
+names = %(names)r
+helpers = %(helpers)r
+uid = os.getuid()
+def agent(argv):
+    if not argv:
+        return False
+    n = os.path.basename(argv[0])
+    if n in names:
+        return len(argv) < 2 or argv[1] not in helpers
+    if re.fullmatch(r"(node|bun|deno|python[\d.]*)", n) and len(argv) > 1:
+        return re.sub(r"\.(m?js|py)$", "", os.path.basename(argv[1])) in names
+    return False
+ports = set()
+for d in os.listdir("/proc"):
+    if not d.isdigit():
+        continue
+    try:
+        if os.stat("/proc/" + d).st_uid != uid:
+            continue
+        argv = [a.decode(errors="replace") for a in open("/proc/%%s/cmdline" %% d, "rb").read().split(b"\0") if a]
+        if not agent(argv):
+            continue
+        env = open("/proc/%%s/environ" %% d, "rb").read().split(b"\0")
+    except OSError:
+        continue
+    for e in env:
+        if e.startswith(b"SSH_CONNECTION="):
+            ports.add(e.split()[1].decode())
+print(" ".join(sorted(ports)))
+'''
+
+_agent_ports = set()
+_agent_ports_lock = threading.Lock()
+
+
+def agent_ssh_poller_loop():
+    """Background thread: while any local ssh client is running, ask each
+    AGENT_SSH_HOSTS host which of our connections carry an agent. Off the
+    main loop so an SSH round trip never stalls the pad."""
+    script = REMOTE_AGENT_SCRIPT % {"names": sorted(AGENT_NAMES),
+                                    "helpers": sorted(AGENT_HELPER_ARGS)}
+    while True:
+        ports = set()
+        if any(os.path.basename((proc_argv(d) or [""])[0]) == "ssh"
+               for d in os.listdir("/proc") if d.isdigit()):
+            for host in AGENT_SSH_HOSTS:
+                try:
+                    out = subprocess.run(
+                        ["ssh", "-o", f"ConnectTimeout={POLARIS_SSH_TIMEOUT}",
+                         "-o", "BatchMode=yes", host, "python3", "-"],
+                        input=script, capture_output=True, text=True,
+                        timeout=POLARIS_SSH_TIMEOUT + 2).stdout
+                    ports.update(int(p) for p in out.split() if p.isdigit())
+                except (OSError, subprocess.SubprocessError):
+                    continue
+        with _agent_ports_lock:
+            _agent_ports.clear()
+            _agent_ports.update(ports)
+        time.sleep(AGENT_SSH_POLL_SECS)
+
+
+def agent_ports_snapshot():
+    with _agent_ports_lock:
+        return set(_agent_ports)
+
+
+def agent_desktops(agent_pids, windows):
+    """-> frozenset((screen_idx, desktop)) of every desktop holding a window
+    that is an ancestor of an agent pid (its terminal)."""
+    out = set()
+    for pid in agent_pids:
+        anc = process_ancestors(pid)
+        for wpid, scr, desks in windows:
+            if wpid in anc:
+                out.update((scr, d) for d in desks)
+    return frozenset(out)
+
+
 # Remote counterpart of find_transcript/transcript_sentiment/local_claude_sessions,
 # run on Polaris over SSH (python3 fed on stdin) so a session poll is one round
 # trip regardless of how many sessions are found. Prints "pid|sentiment|sid|cwd".
@@ -910,9 +1077,10 @@ def dim_variant(color):
 def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, urg0, urg1,
           note_binds, cc_binds,
           drums_on=False, keys_on=False, user_ctrl=None, session_on=False,
-          session_map=None, agent=None):
+          session_map=None, agent=None, agent_ws=frozenset()):
     msg = []
     flash_msg = []
+    rgb = []   # dimmed non-current pads, sent as one RGB SysEx
     agent = agent or {}
     for scr, (grid, cur, marked, occ, urg) in enumerate(
             ((GRID_S0, cur0, marked0, occ0, urg0),
@@ -924,6 +1092,8 @@ def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, urg0, urg1,
                 color = COLOR_ACTIVE
             elif desk in marked:
                 color = marked[desk]
+            elif (scr, desk) in agent_ws:
+                color = COLOR_AGENT_HERE
             elif desk in occ:
                 color = COLOR_IDLE
             else:                    # empty workspace: unlit
@@ -943,6 +1113,10 @@ def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, urg0, urg1,
                 flash_msg += ["91", f"{note:02X}", f"{color:02X}"]
             else:
                 msg += ["90", f"{note:02X}", f"{color:02X}"]
+                if color and color != COLOR_ACTIVE and color in PALETTE_RGB:
+                    rgb += ["03", f"{note:02X}"] + [
+                        f"{max(1, round(v * INACTIVE_SCALE)) if v else 0:02X}"
+                        for v in PALETTE_RGB[color]]
     for note, (color, _) in note_binds.items():
         msg += ["90", f"{note:02X}", f"{color:02X}"]
     for cc, (color, _) in cc_binds.items():
@@ -972,6 +1146,8 @@ def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, urg0, urg1,
     msg += ["B0", f"{SESSION_CC:02X}", f"{session_color:02X}"]
     for cc in ARROW_CCS:
         msg += ["B0", f"{cc:02X}", f"{COLOR_ARROW:02X}"]
+    if rgb:
+        msg += ["F0", "00", "20", "29", "02", "0D", "03"] + rgb + ["F7"]
     # flash messages go after the static ones: a ch1 note-on cancels a flash
     send_hex(ports, " ".join(msg + flash_msg))
 
@@ -1070,6 +1246,8 @@ def run_session(ports):
     alerts = []        # agent_alerts(), refreshed every AGENT_POLL_SECS
     acked = {}         # session_id -> ts of the green alert whose window got focus
     agent = {}         # (screen_idx, desktop) -> flash color
+    agent_pids = set()   # local_agent_pids(), refreshed every AGENT_POLL_SECS
+    agent_ws = frozenset()   # agent_desktops(): pads lit yellow
     agent_log = {}     # session_id -> color last logged
     last_agent_poll = 0.0
 
@@ -1078,7 +1256,7 @@ def run_session(ports):
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     jrn = journal_follower()
     log(f"connected on {ports}, {len(note_binds) + len(cc_binds)} command binding(s)")
-    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
+    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
     run_kwin_script(os.path.join(SCRIPT_DIR, "padspace-events.js"),
                     EVENTS_SCRIPT, "padspace-events")  # persistent, event-driven
 
@@ -1112,7 +1290,7 @@ def run_session(ports):
                             if s[scr] is not None:
                                 s[scr] = desk
                                 state = tuple(s)
-                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
                         elif keys_on and note in NUMPAD:
                             press_digit(NUMPAD[note])
                         elif drums_on and note in DRUM_PADS:
@@ -1162,7 +1340,7 @@ def run_session(ports):
                                 upload_drumkit()
                             log(f"drum kit {'ON' if drums_on else 'off'}")
                             clear_all(ports)
-                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
                         elif cc == KEYS_CC:
                             keys_on = not keys_on
                             if keys_on:
@@ -1173,7 +1351,7 @@ def run_session(ports):
                                 session_map = {}
                             log(f"numpad {'ON' if keys_on else 'off'}")
                             clear_all(ports)
-                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
                         elif cc == USER_CC:
                             user_ctrl = load_ctrl() if user_ctrl is None else None
                             if user_ctrl is not None:
@@ -1185,7 +1363,7 @@ def run_session(ports):
                             else:
                                 log("skill launcher off")
                             clear_all(ports)
-                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
                         elif cc == SESSION_CC:
                             session_on = not session_on
                             if session_on:
@@ -1204,7 +1382,7 @@ def run_session(ports):
                             log(f"session tracker {'ON' if session_on else 'off'}: "
                                 f"{len(session_map)} session(s)")
                             clear_all(ports)
-                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
                         elif cc in cc_binds:
                             color, cmd = cc_binds[cc]
                             flash(True, cc, color)
@@ -1224,9 +1402,12 @@ def run_session(ports):
                 if wp:
                     windows, active_pid = wp
                     new_agent = agent_pads(alerts, windows, active_pid, acked)
-                    if new_agent != agent:
-                        agent = new_agent
-                        light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
+                    new_ws = agent_desktops(agent_pids, windows)
+                    if new_agent != agent or new_ws != agent_ws:
+                        if new_ws != agent_ws:
+                            log(f"agent desktops: {sorted(new_ws)}")
+                        agent, agent_ws = new_agent, new_ws
+                        light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
                 parsed = parse_state(line)
                 if parsed:
                     t_ms, data = parsed
@@ -1236,7 +1417,7 @@ def run_session(ports):
                         pass
                     elif data != state:
                         state = data
-                        light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
+                        light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
             now = time.monotonic()
             if keys_on and now - last_osc >= OSC_TICK_SECS:
                 last_osc = now
@@ -1245,6 +1426,7 @@ def run_session(ports):
                 last_agent_poll = now
                 live = live_claude_sessions()
                 alerts = agent_alerts(live, agent_events(live))
+                agent_pids = local_agent_pids(agent_ports_snapshot())
                 cur_log = {a[0]: a[3] for a in alerts}
                 for sid, (_, _, name) in live.items():
                     if cur_log.get(sid) != agent_log.get(sid):
@@ -1252,16 +1434,20 @@ def run_session(ports):
                         log(f"agent {name}: {what}")
                 agent_log = cur_log
                 new_agent = agent_pads(alerts, windows, active_pid, acked)
-                if new_agent != agent:
-                    agent = new_agent
-                    log(f"agent pads: {sorted(agent.items())}")
-                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
+                new_ws = agent_desktops(agent_pids, windows)
+                if new_agent != agent or new_ws != agent_ws:
+                    if new_agent != agent:
+                        log(f"agent pads: {sorted(new_agent.items())}")
+                    if new_ws != agent_ws:
+                        log(f"agent desktops: {sorted(new_ws)}")
+                    agent, agent_ws = new_agent, new_ws
+                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
             if session_on and now - last_session_poll >= SESSION_POLL_SECS:
                 last_session_poll = now
                 new_map = build_session_map(local_claude_sessions(), polaris_sessions_snapshot())
                 if new_map != session_map:
                     session_map = new_map
-                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
+                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
             for f in flashes[:]:
                 is_cc, ident, color, deadline = f
                 if now >= deadline:
@@ -1280,7 +1466,7 @@ def run_session(ports):
                     conf_mtime = bindings_mtime()
                     note_binds, cc_binds = load_bindings()
                     clear_all(ports)
-                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent)
+                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
                     log(f"bindings reloaded: {len(note_binds) + len(cc_binds)} command binding(s)")
     finally:
         _polaris_stop.set()
@@ -1301,6 +1487,7 @@ def main():
     signal.signal(signal.SIGTERM, restore)
     signal.signal(signal.SIGINT, restore)
 
+    threading.Thread(target=agent_ssh_poller_loop, daemon=True).start()
     announced = False
     while True:
         ports[:] = amidi_ports()
