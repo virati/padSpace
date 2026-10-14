@@ -1387,6 +1387,11 @@ def run_session(ports):
     agent_log = {}     # session_id -> color last logged
     last_agent_poll = 0.0
 
+    def mouse_led():
+        if not mouse_on:
+            return None
+        return mouse_level % MOUSE_LEVELS
+
     seq = subprocess.Popen(
         ["aseqdump", "-p", f"{SEQ_CLIENT}:0,{SEQ_CLIENT}:1"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
@@ -1395,11 +1400,6 @@ def run_session(ports):
     light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws, mouse_led())
     run_kwin_script(os.path.join(SCRIPT_DIR, "padspace-events.js"),
                     EVENTS_SCRIPT, "padspace-events")  # persistent, event-driven
-
-    def mouse_led():
-        if not mouse_on:
-            return None
-        return mouse_level % MOUSE_LEVELS
 
     def flash(is_cc, ident, color):
         status = "B0" if is_cc else "90"
