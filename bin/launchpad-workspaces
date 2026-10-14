@@ -125,6 +125,31 @@ COLOR_USER_ON = 3     # white while the skill launcher is active
 CLAUDE_CMD = 'konsole -e distrobox enter claudebox -- claude "/{name}"'
 HERMES_CMD = 'konsole -e ' + os.path.expanduser("~/.local/bin/hermes") + ' --skills {name} chat'
 
+# Mouse mode: a TAP on User turns all 64 pads into a map of the whole
+# desktop (bounding box of every screen). A pad press moves the pointer to the
+# centre of that pad's cell. Another press within MOUSE_REFINE_SECS zooms into
+# the cell just chosen: the 8x8 grid now spans only that cell, so two presses
+# land within ~1/64 of the desktop and a third within ~1/512 (MOUSE_LEVELS).
+# After the window lapses, or after the last level, the next press is coarse
+# again. Grid colour shows the level the NEXT press works at. A HOLD on User
+# (>= HOLD_MOVE_SECS) opens the skill launcher above instead; tapping User
+# while either is on turns it off. The right-hand column is the mouse buttons.
+# ydotool's --absolute slams the pointer to the top-left corner and then moves
+# relatively, so the ydotoold virtual device must have flat acceleration —
+# set on every mode entry (ydotool_flat).
+MOUSE_REFINE_SECS = 3.0
+MOUSE_LEVELS = 3
+MOUSE_LEVEL_COLORS = (45, 37, 21)   # blue = coarse, cyan = 2nd, green = 3rd
+COLOR_MOUSE_ON = 45
+MOUSE_BUTTONS = {   # right-column cc -> (ydotool args, LED colour)
+    89: (["click", "0xC0"], 3),                    # left click
+    79: (["click", "0xC1"], 9),                    # right click
+    69: (["click", "0xC2"], 53),                   # middle click
+    59: (["click", "0xC0", "0xC0"], 1),            # double left click
+    49: (["mousemove", "-w", "-x", "0", "-y", "1"], 37),    # scroll up
+    39: (["mousemove", "-w", "-x", "0", "-y", "-1"], 37),   # scroll down
+}
+
 # Drum mode: the "Drums" round button (row 1, col 6 = CC 96) toggles the
 # bottom TWO pad rows into a sampler kit. Samples are preloaded into
 # PipeWire-Pulse (pactl upload-sample) for low-latency triggering. Mutually
@@ -426,6 +451,51 @@ def press_arrow(cc):
 def press_digit(digit):
     # Linux input keycodes: KEY_1=2 ... KEY_9=10, KEY_0=11
     press_key(11 if digit == 0 else digit + 1)
+
+
+def ydotool(*args):
+    env = dict(os.environ, YDOTOOL_SOCKET=YDOTOOL_SOCKET)
+    subprocess.Popen(["ydotool", *args], env=env,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def ydotool_flat():
+    """Flat pointer acceleration on the ydotoold virtual device, so
+    `mousemove --absolute` lands where asked (KWin input-device D-Bus)."""
+    out = subprocess.run(
+        ["busctl", "--user", "call", "org.kde.KWin", "/org/kde/KWin/InputDevice",
+         "org.kde.KWin.InputDeviceManager", "ListPointers"],
+        capture_output=True, text=True, timeout=10).stdout
+    for dev in re.findall(r'"([^"]+)"', out):
+        path = f"/org/kde/KWin/InputDevice/{dev}"
+        name = subprocess.run(
+            ["busctl", "--user", "get-property", "org.kde.KWin", path,
+             "org.kde.KWin.InputDevice", "name"],
+            capture_output=True, text=True, timeout=10).stdout
+        if "ydotoold" in name:
+            for prop, sig, val in (("pointerAccelerationProfileFlat", "b", "true"),
+                                   ("pointerAcceleration", "d", "0")):
+                subprocess.run(
+                    ["busctl", "--user", "set-property", "org.kde.KWin", path,
+                     "org.kde.KWin.InputDevice", prop, sig, val],
+                    capture_output=True, timeout=10)
+            return True
+    return False
+
+
+def mouse_cell(region, note):
+    """The sub-rectangle of `region` (x, y, w, h) that grid pad `note` covers.
+    Row 1 is the bottom row, so it maps to the bottom eighth."""
+    x, y, w, h = region
+    r, c = divmod(note, 10)
+    return (x + (c - 1) * w / 8, y + (8 - r) * h / 8, w / 8, h / 8)
+
+
+def mouse_move(bbox, cell):
+    x, y, w, h = cell
+    # --absolute starts from the top-left clamp point = the bbox origin
+    ydotool("mousemove", "--absolute",
+            "-x", str(round(x + w / 2 - bbox[0])), "-y", str(round(y + h / 2 - bbox[1])))
 
 
 def load_ctrl():
@@ -967,6 +1037,36 @@ def try_activate_window(pids, jrn, timeout=0.4):
             return m.group(1) == "hit"
 
 
+SCREEN_BBOX = """
+var s = workspace.screens, x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+for (var i = 0; i < s.length; i++) {
+    var g = s[i].geometry;
+    x0 = Math.min(x0, g.x); y0 = Math.min(y0, g.y);
+    x1 = Math.max(x1, g.x + g.width); y1 = Math.max(y1, g.y + g.height);
+}
+console.error("PADSPACE-BBOX " + x0 + "," + y0 + "," + (x1 - x0) + "," + (y1 - y0));
+"""
+BBOX_RE = re.compile(r"PADSPACE-BBOX (-?\d+),(-?\d+),(\d+),(\d+)")
+
+
+def screen_bbox(jrn, timeout=0.5):
+    """Bounding box (x, y, w, h) of all screens, in KWin logical pixels, or
+    None. Reads `jrn.stdout` directly, like try_activate_window."""
+    run_kwin_script(ACTION_JS, SCREEN_BBOX, "padspace-action")
+    deadline = time.monotonic() + timeout
+    while (remaining := deadline - time.monotonic()) > 0:
+        ready, _, _ = select.select([jrn.stdout], [], [], remaining)
+        if jrn.stdout not in ready:
+            return None
+        line = jrn.stdout.readline()
+        if not line:
+            return None
+        m = BBOX_RE.search(line)
+        if m:
+            return tuple(int(v) for v in m.groups())
+    return None
+
+
 def open_local_session_window(rec):
     if rec.get("session_id"):
         cmd = (f'konsole --workdir {shlex.quote(rec["cwd"])} -e '
@@ -1077,7 +1177,9 @@ def dim_variant(color):
 def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, urg0, urg1,
           note_binds, cc_binds,
           drums_on=False, keys_on=False, user_ctrl=None, session_on=False,
-          session_map=None, agent=None, agent_ws=frozenset()):
+          session_map=None, agent=None, agent_ws=frozenset(), mouse=None):
+    if mouse is not None:   # mouse mode owns the whole grid and right column
+        return light_mouse(ports, mouse, cc_binds)
     msg = []
     flash_msg = []
     rgb = []   # dimmed non-current pads, sent as one RGB SysEx
@@ -1150,6 +1252,34 @@ def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, urg0, urg1,
         msg += ["F0", "00", "20", "29", "02", "0D", "03"] + rgb + ["F7"]
     # flash messages go after the static ones: a ch1 note-on cancels a flash
     send_hex(ports, " ".join(msg + flash_msg))
+
+
+def mode_leds(drums_on=False, keys_on=False, user_ctrl=None, session_on=False, mouse=None):
+    user_color = (COLOR_MOUSE_ON if mouse is not None
+                  else COLOR_USER_ON if user_ctrl is not None else COLOR_MODE_OFF)
+    msg = []
+    for cc, color in ((DRUMS_CC, COLOR_DRUMS_ON if drums_on else COLOR_MODE_OFF),
+                      (KEYS_CC, COLOR_KEYS_ON if keys_on else COLOR_MODE_OFF),
+                      (USER_CC, user_color),
+                      (SESSION_CC, COLOR_SESSION_ON if session_on else COLOR_MODE_OFF),
+                      *((cc, COLOR_ARROW) for cc in ARROW_CCS)):
+        msg += ["B0", f"{cc:02X}", f"{color:02X}"]
+    return msg
+
+
+def light_mouse(ports, level, cc_binds):
+    color = MOUSE_LEVEL_COLORS[level]
+    msg = []
+    for r in range(1, 9):
+        for c in range(1, 9):
+            msg += ["90", f"{10 * r + c:02X}", f"{color:02X}"]
+    for cc, (bcolor, _) in cc_binds.items():
+        if cc not in MOUSE_BUTTONS:
+            msg += ["B0", f"{cc:02X}", f"{bcolor:02X}"]
+    for cc, (_, bcolor) in MOUSE_BUTTONS.items():
+        msg += ["B0", f"{cc:02X}", f"{bcolor:02X}"]
+    msg += mode_leds(mouse=level)
+    send_hex(ports, " ".join(msg))
 
 
 def parse_state(line):
@@ -1234,6 +1364,12 @@ def run_session(ports):
     keys_on = False
     user_ctrl = None   # None = skill launcher off (default); else [claude_names, hermes_names]
     session_on = False
+    mouse_on = False
+    mouse_bbox = None      # screen_bbox(), fetched on mouse-mode entry
+    mouse_region = None    # rectangle the next refining press subdivides
+    mouse_level = 0        # presses so far in this refinement chain
+    mouse_last = 0.0       # monotonic time of the last mouse press
+    user_pressed_at = None   # User is tap (mouse) vs hold (skill launcher)
     session_map = {}   # note -> session record, rebuilt every SESSION_POLL_SECS while session_on
     polaris_thread = None
     last_session_poll = 0.0
@@ -1256,9 +1392,14 @@ def run_session(ports):
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     jrn = journal_follower()
     log(f"connected on {ports}, {len(note_binds) + len(cc_binds)} command binding(s)")
-    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
+    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws, mouse_led())
     run_kwin_script(os.path.join(SCRIPT_DIR, "padspace-events.js"),
                     EVENTS_SCRIPT, "padspace-events")  # persistent, event-driven
+
+    def mouse_led():
+        if not mouse_on:
+            return None
+        return mouse_level % MOUSE_LEVELS
 
     def flash(is_cc, ident, color):
         status = "B0" if is_cc else "90"
@@ -1278,7 +1419,18 @@ def run_session(ports):
                 if m:
                     note, vel = int(m.group(2)), int(m.group(3))
                     if vel > 0:
-                        if note in GRID_S0 or note in GRID_S1:
+                        if mouse_on and 1 <= note % 10 <= 8 and 11 <= note <= 88:
+                            now = time.monotonic()
+                            if (now - mouse_last > MOUSE_REFINE_SECS
+                                    or mouse_level >= MOUSE_LEVELS):
+                                mouse_level, mouse_region = 0, mouse_bbox
+                            mouse_region = mouse_cell(mouse_region, note)
+                            mouse_level += 1
+                            mouse_last = now
+                            mouse_move(mouse_bbox, mouse_region)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws, mouse_led())
+                            flash(False, note, MOUSE_LEVEL_COLORS[mouse_led()])
+                        elif note in GRID_S0 or note in GRID_S1:
                             scr = 0 if note in GRID_S0 else 1
                             desk = (GRID_S0 if scr == 0 else GRID_S1)[note]
                             grabbed = None
@@ -1290,7 +1442,7 @@ def run_session(ports):
                             if s[scr] is not None:
                                 s[scr] = desk
                                 state = tuple(s)
-                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws, mouse_led())
                         elif keys_on and note in NUMPAD:
                             press_digit(NUMPAD[note])
                         elif drums_on and note in DRUM_PADS:
@@ -1325,13 +1477,49 @@ def run_session(ports):
                         grabbed = None
                 else:
                     m = CC_RE.search(line)
-                    if m and int(m.group(3)) > 0:
+                    if m and int(m.group(2)) == USER_CC and int(m.group(3)) == 0:
+                        # User released: tap = mouse mode, hold = skill launcher
+                        held_long = (user_pressed_at is not None and
+                                     time.monotonic() - user_pressed_at >= HOLD_MOVE_SECS)
+                        user_pressed_at = None
+                        if held_long:
+                            mouse_on = False
+                            user_ctrl = load_ctrl() if user_ctrl is None else None
+                        elif mouse_on or user_ctrl is not None:
+                            mouse_on, user_ctrl = False, None
+                        else:
+                            mouse_bbox = screen_bbox(jrn) or mouse_bbox
+                            if mouse_bbox is None:
+                                log("mouse mode: no screen geometry from KWin, staying off")
+                            else:
+                                if not ydotool_flat():
+                                    log("mouse mode: ydotoold device not found in KWin")
+                                mouse_on, mouse_level, mouse_last = True, 0, 0.0
+                        if mouse_on or user_ctrl is not None:
+                            drums_on = keys_on = session_on = False
+                            _polaris_stop.set()
+                            polaris_thread = None
+                            session_map = {}
+                        if mouse_on:
+                            log(f"mouse mode ON: desktop {mouse_bbox}")
+                        elif user_ctrl is not None:
+                            log(f"skill launcher ON: claude={user_ctrl[0]} hermes={user_ctrl[1]}")
+                        else:
+                            log("user mode off")
+                        clear_all(ports)
+                        light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws, mouse_led())
+                    elif m and int(m.group(3)) > 0:
                         cc = int(m.group(2))
-                        if cc in ARROW_CCS:
+                        if mouse_on and cc in MOUSE_BUTTONS:
+                            args, color = MOUSE_BUTTONS[cc]
+                            ydotool(*args)
+                            flash(True, cc, color)
+                        elif cc in ARROW_CCS:
                             press_arrow(cc)
                         elif cc == DRUMS_CC:
                             drums_on = not drums_on
                             if drums_on:
+                                mouse_on = False
                                 keys_on = session_on = False
                                 user_ctrl = None
                                 _polaris_stop.set()
@@ -1340,10 +1528,11 @@ def run_session(ports):
                                 upload_drumkit()
                             log(f"drum kit {'ON' if drums_on else 'off'}")
                             clear_all(ports)
-                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws, mouse_led())
                         elif cc == KEYS_CC:
                             keys_on = not keys_on
                             if keys_on:
+                                mouse_on = False
                                 drums_on = session_on = False
                                 user_ctrl = None
                                 _polaris_stop.set()
@@ -1351,22 +1540,13 @@ def run_session(ports):
                                 session_map = {}
                             log(f"numpad {'ON' if keys_on else 'off'}")
                             clear_all(ports)
-                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws, mouse_led())
                         elif cc == USER_CC:
-                            user_ctrl = load_ctrl() if user_ctrl is None else None
-                            if user_ctrl is not None:
-                                drums_on = keys_on = session_on = False
-                                _polaris_stop.set()
-                                polaris_thread = None
-                                session_map = {}
-                                log(f"skill launcher ON: claude={user_ctrl[0]} hermes={user_ctrl[1]}")
-                            else:
-                                log("skill launcher off")
-                            clear_all(ports)
-                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
+                            user_pressed_at = time.monotonic()   # acted on at release
                         elif cc == SESSION_CC:
                             session_on = not session_on
                             if session_on:
+                                mouse_on = False
                                 drums_on = keys_on = False
                                 user_ctrl = None
                                 _polaris_stop.clear()
@@ -1382,7 +1562,7 @@ def run_session(ports):
                             log(f"session tracker {'ON' if session_on else 'off'}: "
                                 f"{len(session_map)} session(s)")
                             clear_all(ports)
-                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
+                            light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws, mouse_led())
                         elif cc in cc_binds:
                             color, cmd = cc_binds[cc]
                             flash(True, cc, color)
@@ -1407,7 +1587,7 @@ def run_session(ports):
                         if new_ws != agent_ws:
                             log(f"agent desktops: {sorted(new_ws)}")
                         agent, agent_ws = new_agent, new_ws
-                        light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
+                        light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws, mouse_led())
                 parsed = parse_state(line)
                 if parsed:
                     t_ms, data = parsed
@@ -1417,8 +1597,12 @@ def run_session(ports):
                         pass
                     elif data != state:
                         state = data
-                        light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
+                        light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws, mouse_led())
             now = time.monotonic()
+            if (mouse_on and 0 < mouse_level < MOUSE_LEVELS
+                    and now - mouse_last > MOUSE_REFINE_SECS):
+                mouse_level = 0   # window lapsed: next press is coarse again
+                light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws, mouse_led())
             if keys_on and now - last_osc >= OSC_TICK_SECS:
                 last_osc = now
                 numpad_rgb(ports, now)
@@ -1441,13 +1625,13 @@ def run_session(ports):
                     if new_ws != agent_ws:
                         log(f"agent desktops: {sorted(new_ws)}")
                     agent, agent_ws = new_agent, new_ws
-                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
+                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws, mouse_led())
             if session_on and now - last_session_poll >= SESSION_POLL_SECS:
                 last_session_poll = now
                 new_map = build_session_map(local_claude_sessions(), polaris_sessions_snapshot())
                 if new_map != session_map:
                     session_map = new_map
-                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
+                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws, mouse_led())
             for f in flashes[:]:
                 is_cc, ident, color, deadline = f
                 if now >= deadline:
@@ -1466,7 +1650,7 @@ def run_session(ports):
                     conf_mtime = bindings_mtime()
                     note_binds, cc_binds = load_bindings()
                     clear_all(ports)
-                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws)
+                    light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws, mouse_led())
                     log(f"bindings reloaded: {len(note_binds) + len(cc_binds)} command binding(s)")
     finally:
         _polaris_stop.set()
