@@ -126,12 +126,14 @@ CLAUDE_CMD = 'konsole -e distrobox enter claudebox -- claude "/{name}"'
 HERMES_CMD = 'konsole -e ' + os.path.expanduser("~/.local/bin/hermes") + ' --skills {name} chat'
 
 # Mouse mode: a TAP on User turns all 64 pads into a map of the whole
-# desktop (bounding box of every screen). A pad press moves the pointer to the
-# centre of that pad's cell. Another press within MOUSE_REFINE_SECS zooms into
-# the cell just chosen: the 8x8 grid now spans only that cell, so two presses
-# land within ~1/64 of the desktop and a third within ~1/512 (MOUSE_LEVELS).
-# After the window lapses, or after the last level, the next press is coarse
-# again. Grid colour shows the level the NEXT press works at. A HOLD on User
+# desktop (bounding box of every screen), corner pads on the screen's very
+# corners: the first press puts the pointer on that pad's point of an evenly
+# spaced 8x8 lattice (top-left pad = pixel 0,0). A press within MOUSE_REFINE_SECS of the last
+# one is a NUDGE relative to the pad pressed before it: the same pad again =
+# stay put, one pad to the right = a small step right. The step is 1/8 of the
+# lattice spacing on the second press and 1/64 from the third on
+# (MOUSE_LEVELS caps the shrinking). After the window lapses the next press
+# is absolute again. Grid colour shows the level the NEXT press works at. A HOLD on User
 # (>= HOLD_MOVE_SECS) opens the skill launcher above instead; tapping User
 # while either is on turns it off. The right-hand column is the mouse buttons.
 # ydotool's --absolute slams the pointer to the top-left corner and then moves
@@ -483,19 +485,28 @@ def ydotool_flat():
     return False
 
 
-def mouse_cell(region, note):
-    """The sub-rectangle of `region` (x, y, w, h) that grid pad `note` covers.
-    Row 1 is the bottom row, so it maps to the bottom eighth."""
-    x, y, w, h = region
+def mouse_target(bbox, pos, prev_note, note, level):
+    """Pointer position after pressing `note`. Level 0: the pad's point on
+    an 8x8 lattice whose corners are the corners of `bbox`. Level n >= 1:
+    `pos` nudged by (note - prev_note) pads, each worth 1/8**n of the lattice
+    spacing (n capped at MOUSE_LEVELS - 1). Row 1 is the bottom row, so a
+    higher row moves up."""
+    x0, y0, w, h = bbox
+    dx, dy = (w - 1) / 7, (h - 1) / 7   # lattice spacing
     r, c = divmod(note, 10)
-    return (x + (c - 1) * w / 8, y + (8 - r) * h / 8, w / 8, h / 8)
+    if level == 0:
+        return (x0 + (c - 1) * dx, y0 + (8 - r) * dy)
+    pr, pc = divmod(prev_note, 10)
+    step = 8 ** min(level, MOUSE_LEVELS - 1)
+    x = pos[0] + (c - pc) * dx / step
+    y = pos[1] - (r - pr) * dy / step
+    return (min(max(x, x0), x0 + w - 1), min(max(y, y0), y0 + h - 1))
 
 
-def mouse_move(bbox, cell):
-    x, y, w, h = cell
+def mouse_move(bbox, pos):
     # --absolute starts from the top-left clamp point = the bbox origin
     ydotool("mousemove", "--absolute",
-            "-x", str(round(x + w / 2 - bbox[0])), "-y", str(round(y + h / 2 - bbox[1])))
+            "-x", str(round(pos[0] - bbox[0])), "-y", str(round(pos[1] - bbox[1])))
 
 
 def load_ctrl():
@@ -1366,7 +1377,8 @@ def run_session(ports):
     session_on = False
     mouse_on = False
     mouse_bbox = None      # screen_bbox(), fetched on mouse-mode entry
-    mouse_region = None    # rectangle the next refining press subdivides
+    mouse_pos = None       # where we last put the pointer
+    mouse_prev = None      # pad pressed last; nudges are measured from it
     mouse_level = 0        # presses so far in this refinement chain
     mouse_last = 0.0       # monotonic time of the last mouse press
     user_pressed_at = None   # User is tap (mouse) vs hold (skill launcher)
@@ -1390,7 +1402,7 @@ def run_session(ports):
     def mouse_led():
         if not mouse_on:
             return None
-        return mouse_level % MOUSE_LEVELS
+        return min(mouse_level, MOUSE_LEVELS - 1)
 
     seq = subprocess.Popen(
         ["aseqdump", "-p", f"{SEQ_CLIENT}:0,{SEQ_CLIENT}:1"],
@@ -1421,13 +1433,14 @@ def run_session(ports):
                     if vel > 0:
                         if mouse_on and 1 <= note % 10 <= 8 and 11 <= note <= 88:
                             now = time.monotonic()
-                            if (now - mouse_last > MOUSE_REFINE_SECS
-                                    or mouse_level >= MOUSE_LEVELS):
-                                mouse_level, mouse_region = 0, mouse_bbox
-                            mouse_region = mouse_cell(mouse_region, note)
+                            if now - mouse_last > MOUSE_REFINE_SECS:
+                                mouse_level = 0
+                            mouse_pos = mouse_target(mouse_bbox, mouse_pos, mouse_prev,
+                                                     note, mouse_level)
+                            mouse_prev = note
                             mouse_level += 1
                             mouse_last = now
-                            mouse_move(mouse_bbox, mouse_region)
+                            mouse_move(mouse_bbox, mouse_pos)
                             light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws, mouse_led())
                             flash(False, note, MOUSE_LEVEL_COLORS[mouse_led()])
                         elif note in GRID_S0 or note in GRID_S1:
@@ -1599,7 +1612,7 @@ def run_session(ports):
                         state = data
                         light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws, mouse_led())
             now = time.monotonic()
-            if (mouse_on and 0 < mouse_level < MOUSE_LEVELS
+            if (mouse_on and mouse_level > 0
                     and now - mouse_last > MOUSE_REFINE_SECS):
                 mouse_level = 0   # window lapsed: next press is coarse again
                 light(ports, *state, note_binds, cc_binds, drums_on, keys_on, user_ctrl, session_on, session_map, agent, agent_ws, mouse_led())
