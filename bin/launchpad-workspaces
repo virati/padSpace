@@ -347,7 +347,9 @@ if (scrs.length > %(scr)d) {
   const t = scrs[%(scr)d];
   for (const w of workspace.windowList()) {
     if (("" + w.internalId) === "%(win)s") {
-      w.desktops = [workspace.desktops[%(desk)d]];
+      // Geometry FIRST, while the window is still visible: setting desktops
+      // first hides it on its old output, and KWin then reverted the hidden
+      // window's new geometry ~40 ms later (seen 2026-10-15: screen 1 -> 0).
       if (w.output.name !== t.name) {
         const g = t.geometry;
         const fg = w.frameGeometry;
@@ -358,6 +360,7 @@ if (scrs.length > %(scr)d) {
           height: Math.min(fg.height, g.height - 40)
         };
       }
+      w.desktops = [workspace.desktops[%(desk)d]];
       break;
     }
   }
@@ -1525,6 +1528,11 @@ def run_session(ports):
                         if (time.monotonic() - pressed_at >= HOLD_MOVE_SECS
                                 and grabbed and grabbed != "none"):
                             last_action_ms = time.time() * 1000
+                            move_window(grabbed, scr, desk)
+                            # re-assert once: KWin can bounce the window back to
+                            # its old output a few tens of ms after the move; the
+                            # script is a no-op if it stayed put
+                            time.sleep(0.25)
                             move_window(grabbed, scr, desk)
                             log(f"held pad {note}: moved window to screen {scr} desktop {desk}")
                             flash(False, note, COLOR_ACTIVE)
