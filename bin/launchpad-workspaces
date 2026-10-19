@@ -347,20 +347,34 @@ if (scrs.length > %(scr)d) {
   const t = scrs[%(scr)d];
   for (const w of workspace.windowList()) {
     if (("" + w.internalId) === "%(win)s") {
-      // Geometry FIRST, while the window is still visible: setting desktops
-      // first hides it on its old output, and KWin then reverted the hidden
-      // window's new geometry ~40 ms later (seen 2026-10-15: screen 1 -> 0).
-      if (w.output.name !== t.name) {
+      // Set desktops only AFTER the window is on the target output. A
+      // frameGeometry write is async on Wayland (lands when the client
+      // commits, ~35 ms), but a desktops write is instant: doing both in one
+      // pass hid the window on its old output first and KWin snapped it back
+      // (journal 2026-10-19 11:07:54: P 0:6 -> 1:6 -> 0:6, twice). So: place,
+      // wait for outputChanged, then set desktops; re-place on a bounce for 1.5 s.
+      const w0 = w, d = workspace.desktops[%(desk)d], t0 = Date.now();
+      const place = function () {
         const g = t.geometry;
-        const fg = w.frameGeometry;
-        w.frameGeometry = {
+        const fg = w0.frameGeometry;
+        w0.frameGeometry = {
           x: g.x + Math.max(20, Math.round((g.width - fg.width) / 2)),
           y: g.y + Math.max(20, Math.round((g.height - fg.height) / 2)),
           width: Math.min(fg.width, g.width - 40),
           height: Math.min(fg.height, g.height - 40)
         };
+      };
+      const onOut = function () {
+        if (Date.now() - t0 > 1500) { w0.outputChanged.disconnect(onOut); return; }
+        if (w0.output.name === t.name) w0.desktops = [d];
+        else place();
+      };
+      if (w.output.name !== t.name) {
+        w.outputChanged.connect(onOut);
+        place();
+      } else {
+        w.desktops = [d];
       }
-      w.desktops = [workspace.desktops[%(desk)d]];
       break;
     }
   }
@@ -1528,11 +1542,8 @@ def run_session(ports):
                         if (time.monotonic() - pressed_at >= HOLD_MOVE_SECS
                                 and grabbed and grabbed != "none"):
                             last_action_ms = time.time() * 1000
-                            move_window(grabbed, scr, desk)
-                            # re-assert once: KWin can bounce the window back to
-                            # its old output a few tens of ms after the move; the
-                            # script is a no-op if it stayed put
-                            time.sleep(0.25)
+                            # the script itself waits for the output change and
+                            # re-places on a bounce; no blocking re-run here
                             move_window(grabbed, scr, desk)
                             log(f"held pad {note}: moved window to screen {scr} desktop {desk}")
                             flash(False, note, COLOR_ACTIVE)
