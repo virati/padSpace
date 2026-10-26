@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# padSpace bootstrap — sets up the Launchpad Mini MK3 workspace switcher on a
+# padSpace bootstrap — sets up the Launchpad X / Mini MK3 workspace switcher on a
 # fresh machine (Bazzite/Fedora Kinoite, Plasma 6.7+, Wayland) or refreshes an
 # existing install from this repo. Safe to re-run.
 set -euo pipefail

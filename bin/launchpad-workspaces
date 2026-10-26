@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launchpad Mini MK3 -> KDE per-screen virtual desktop switcher + command pad.
+"""Launchpad X / Mini MK3 -> KDE per-screen virtual desktop switcher + command pad.
 
 Requires Plasma 6.7+ with PerOutputVirtualDesktops=true (kwinrc [Desktops]).
 
@@ -34,8 +34,16 @@ import sys
 import threading
 import time
 
-DEVICE_MATCH = "LPMiniMK3"
-SEQ_CLIENT = "Launchpad Mini MK3"
+# Supported devices: (amidi -l name fragment, ALSA seq client name, Novation
+# SysEx device id). The X and the Mini MK3 share the Programmer-mode layout
+# (top row cc91-98, grid 10*row+col, right column cc89..19) and the LED
+# SysEx; only the device-id byte differs (X = 0C, Mini MK3 = 0D). The X also
+# sends real velocity and polyphonic aftertouch, both ignored here.
+DEVICES = [("Launchpad X", "Launchpad X", "0C"),
+           ("LPMiniMK3", "Launchpad Mini MK3", "0D")]
+DEVICE_MATCH = "|".join(re.escape(d[0]) for d in DEVICES)
+SEQ_CLIENT = DEVICES[0][1]   # set for real by main() once a device is seen
+DEV_ID = DEVICES[0][2]
 # Workspace control: the top two pad rows form two side-by-side 2x4 grids.
 # LEFT grid (cols 1-4) = screen 0 (first display), RIGHT grid (cols 5-8) =
 # screen 1. Within each grid: upper row = desktops 1-4, lower row = 5-8.
@@ -72,8 +80,8 @@ COLOR_FLASH = 3       # white press feedback
 FLASH_SECS = 0.35
 POLL_SECS = 5.0   # safety-net only; the persistent KWin event script does real-time updates
 
-# Hold-to-move: the Mini MK3 has no velocity sensing (always 127), so "hard
-# hit" is approximated by hold duration. Tap a workspace pad = switch; hold it
+# Hold-to-move: the Mini MK3 has no velocity sensing (always 127; the X does,
+# but it is ignored for consistency), so "hard hit" is approximated by hold duration. Tap a workspace pad = switch; hold it
 # this long = the window that was active at press time moves to that pad's
 # desktop and screen (the switch already happened at press, so you land with it).
 HOLD_MOVE_SECS = 0.55
@@ -234,8 +242,19 @@ AGENT_SSH_POLL_SECS = 6.0
 AGENT_POLL_SECS = 1.0
 AGENT_PRUNE_SECS = 600   # drop hook state of sessions gone this long
 
-SYSEX_PROGRAMMER = "F0 00 20 29 02 0D 0E 01 F7"
-SYSEX_LIVE = "F0 00 20 29 02 0D 0E 00 F7"
+
+
+def sysex(body):
+    """Novation SysEx for the connected device: F0 00 20 29 02 <id> <body> F7."""
+    return f"F0 00 20 29 02 {DEV_ID} {body} F7"
+
+
+def sysex_programmer():
+    return sysex("0E 01")
+
+
+def sysex_live():
+    return sysex("0E 00")
 
 SCRIPT_DIR = os.path.expanduser("~/.local/share")
 ACTION_JS = os.path.join(SCRIPT_DIR, "padspace-action.js")
@@ -400,7 +419,21 @@ def amidi_ports():
         out = subprocess.run(["amidi", "-l"], capture_output=True, text=True, timeout=10).stdout
     except Exception:
         return []
-    return [m.group(1) for m in re.finditer(r"(hw:\d+,\d+,\d+)\s+.*" + DEVICE_MATCH, out)]
+    return [m.group(1) for m in re.finditer(r"(hw:\d+,\d+,\d+)\s+.*(?:" + DEVICE_MATCH + ")", out)]
+
+
+def select_device():
+    """Set SEQ_CLIENT/DEV_ID from whichever supported device amidi lists."""
+    global SEQ_CLIENT, DEV_ID
+    try:
+        out = subprocess.run(["amidi", "-l"], capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return None
+    for match, client, dev_id in DEVICES:
+        if match in out:
+            SEQ_CLIENT, DEV_ID = client, dev_id
+            return client
+    return None
 
 
 def send_hex(ports, hexstr):
@@ -1179,7 +1212,7 @@ def numpad_rgb(ports, now):
         else:
             g = int(24 + 100 * (0.5 + 0.5 * math.sin(2 * math.pi * now / n)))
         body += ["03", f"{note:02X}", "00", f"{g:02X}", "08"]
-    send_hex(ports, "F0 00 20 29 02 0D 03 " + " ".join(body) + " F7")
+    send_hex(ports, sysex("03 " + " ".join(body)))
 
 
 def load_bindings():
@@ -1318,7 +1351,7 @@ def light(ports, cur0, cur1, marked0, marked1, occ0, occ1, urg0, urg1,
     for cc in ARROW_CCS:
         msg += ["B0", f"{cc:02X}", f"{COLOR_ARROW:02X}"]
     if rgb:
-        msg += ["F0", "00", "20", "29", "02", "0D", "03"] + rgb + ["F7"]
+        msg += sysex("03 " + " ".join(rgb)).split()
     # flash messages go after the static ones: a ch1 note-on cancels a flash
     send_hex(ports, " ".join(msg + flash_msg))
 
@@ -1422,7 +1455,7 @@ def parse_windows(line):
 
 
 def run_session(ports):
-    send_hex(ports, SYSEX_PROGRAMMER)
+    send_hex(ports, sysex_programmer())
     time.sleep(0.2)
     clear_all(ports)
 
@@ -1740,7 +1773,7 @@ def main():
 
     def restore(signum, frame):
         if ports:
-            send_hex(ports, SYSEX_LIVE)
+            send_hex(ports, sysex_live())
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, restore)
@@ -1750,13 +1783,14 @@ def main():
     announced = False
     while True:
         ports[:] = amidi_ports()
-        if not ports:
+        if not ports or not select_device():
             if not announced:
                 log("waiting for Launchpad...")
                 announced = True
             time.sleep(3)
             continue
         announced = False
+        log(f"device: {SEQ_CLIENT} (sysex id {DEV_ID})")
         try:
             run_session(ports)
         except Exception as e:
